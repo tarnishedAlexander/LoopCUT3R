@@ -161,6 +161,19 @@ dataset_metadata = {
         "skip_condition": None,
         "process_func": lambda args, img_path: process_sintel(args, img_path),
     },
+    "vkitti2": {
+        "img_path": "../dataset/vkitti_2.0.3_mixed",
+        "anno_path": "../dataset/vkitti_2.0.3_textgt",
+        "mask_path": None,
+        "dir_path_func": lambda img_path, seq: os.path.join(img_path, seq, "clone", "Camera_0"),
+        "gt_traj_func": lambda img_path, anno_path, seq: os.path.join(anno_path, seq, "clone", "extrinsic.txt"),
+        "traj_format": "vkitti2",
+        "seq_list": ["Scene01", "Scene02", "Scene06", "Scene18", "Scene20"],
+        "full_seq": False,
+        "mask_path_seq_func": lambda mask_path, seq: None,
+        "skip_condition": None,
+        "process_func": lambda args, img_path: process_vkitti2(args, img_path),
+    },
 }
 
 
@@ -231,3 +244,15 @@ def process_sintel(args, img_path):
             filelist = sorted(glob.glob(f"{img_path}/{seq}/*.png"))
             save_dir = f"{args.output_dir}/{seq}"
             yield filelist, save_dir
+
+
+def process_vkitti2(args, img_path):
+    seq_list = ["Scene01", "Scene02", "Scene06", "Scene18", "Scene20"]
+    for seq in tqdm(seq_list):
+        # We only evaluate on Camera_0 for relpose benchmark
+        filelist = sorted(glob.glob(os.path.join(img_path, seq, "clone", "Camera_0", "*.jpg")))
+        if len(filelist) == 0:
+            filelist = sorted(glob.glob(os.path.join(img_path, seq, "clone", "Camera_0", "*.png")))
+        filelist = filelist[:30]  # Cap sequence length to 30 to prevent OOM
+        save_dir = os.path.join(args.output_dir, seq)
+        yield filelist, save_dir

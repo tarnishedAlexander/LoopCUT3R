@@ -34,9 +34,21 @@ class MVS_Synth_Multi(BaseMultiViewDataset):
         for scene in tqdm(self.scenes):
             scene_dir = osp.join(self.ROOT, scene)
             rgb_dir = osp.join(scene_dir, "rgb")
-            basenames = sorted(
-                [f[:-4] for f in os.listdir(rgb_dir) if f.endswith(".jpg")]
-            )
+            depth_dir = osp.join(scene_dir, "depth")
+            cam_dir = osp.join(scene_dir, "cam")
+
+            rgb_basenames = {
+                f[:-4] for f in os.listdir(rgb_dir) if f.endswith(".jpg")
+            }
+            depth_basenames = {
+                f[:-4] for f in os.listdir(depth_dir) if f.endswith(".npy")
+            }
+            cam_basenames = {
+                f[:-4] for f in os.listdir(cam_dir) if f.endswith(".npz")
+            }
+
+            # keep only samples that are fully preprocessed
+            basenames = sorted(rgb_basenames & depth_basenames & cam_basenames)
             num_imgs = len(basenames)
             cut_off = (
                 self.num_views if not self.allow_repeat else max(self.num_views // 3, 3)

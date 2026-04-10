@@ -151,9 +151,17 @@ except ImportError:
 
         def apply_rope1d(self, tokens, pos1d, cos, sin):
             assert pos1d.ndim == 2
-            cos = torch.nn.functional.embedding(pos1d, cos)[:, None, :, :]
-            sin = torch.nn.functional.embedding(pos1d, sin)[:, None, :, :]
-            return (tokens * cos) + (self.rotate_half(tokens) * sin)
+            # Some special tokens (e.g. pose token) use -1 as sentinel position.
+            # Embedding with negative indices triggers CUDA index assertions.
+            neg_mask = pos1d < 0
+            pos_safe = pos1d.clamp(min=0, max=cos.shape[0] - 1)
+            cos = torch.nn.functional.embedding(pos_safe, cos)[:, None, :, :]
+            sin = torch.nn.functional.embedding(pos_safe, sin)[:, None, :, :]
+            out = (tokens * cos) + (self.rotate_half(tokens) * sin)
+            if neg_mask.any():
+                # Keep sentinel-position tokens unchanged (no RoPE).
+                out = torch.where(neg_mask[:, None, :, None], tokens, out)
+            return out
 
         def forward(self, tokens, positions):
             """

@@ -24,6 +24,7 @@ class CustomRandomSampler(Sampler):
         min_view_size,
         max_view_size,
         world_size,
+        rank=0,
         warmup=1,
         drop_last=True,
     ):
@@ -32,8 +33,20 @@ class CustomRandomSampler(Sampler):
         self.min_view_size = min_view_size
         self.max_view_size = max_view_size
         self.drop_last = drop_last
+        self.world_size = max(int(world_size), 1)
+        self.rank = int(rank)
+        if not (0 <= self.rank < self.world_size):
+            raise ValueError(
+                f"Invalid rank={self.rank} for world_size={self.world_size}"
+            )
         self.len_dataset = N = len(dataset)
-        self.total_size = N
+
+        if self.drop_last:
+            self.num_samples = N // self.world_size
+        else:
+            self.num_samples = (N + self.world_size - 1) // self.world_size
+        self.padded_total_size = self.num_samples * self.world_size
+        self.total_size = self.num_samples
 
         self.epoch = None
         self.epochf = 0.0
@@ -52,11 +65,19 @@ class CustomRandomSampler(Sampler):
 
         seed = self.epoch + 788
         rng = np.random.default_rng(seed=seed)
-        # random indices (will restart from 0 if not drop_last)
-        sample_idxs = np.arange(self.total_size)
+        sample_idxs = np.arange(self.len_dataset)
         rng.shuffle(sample_idxs)
+
+        if self.drop_last:
+            sample_idxs = sample_idxs[: self.padded_total_size]
+        elif self.padded_total_size > self.len_dataset:
+            pad_count = self.padded_total_size - self.len_dataset
+            sample_idxs = np.concatenate([sample_idxs, sample_idxs[:pad_count]])
+
+        sample_idxs = sample_idxs[self.rank : self.padded_total_size : self.world_size]
+
         # random feat_idxs (same across each batch)
-        n_batches = (self.total_size + self.batch_size - 1) // self.batch_size
+        n_batches = (self.num_samples + self.batch_size - 1) // self.batch_size
         if self.pool_size > 1:
             p = np.ones(self.pool_size)
             p[: self.pool_size // 2] *= 2
@@ -65,12 +86,12 @@ class CustomRandomSampler(Sampler):
         else:
             _feat_idxs = rng.integers(self.pool_size, size=n_batches)
         _feat_idxs = np.broadcast_to(_feat_idxs[:, None], (n_batches, self.batch_size))
-        _feat_idxs = _feat_idxs.ravel()[: self.total_size]
+        _feat_idxs = _feat_idxs.ravel()[: self.num_samples]
         _view_idxs = rng.integers(
             self.min_view_size, self.max_view_size + 1, size=n_batches
         )
         _view_idxs = np.broadcast_to(_view_idxs[:, None], (n_batches, self.batch_size))
-        _view_idxs = _view_idxs.ravel()[: self.total_size]
+        _view_idxs = _view_idxs.ravel()[: self.num_samples]
 
         idxs = np.c_[sample_idxs, _feat_idxs, _view_idxs]
         yield from (tuple(idx) for idx in idxs)

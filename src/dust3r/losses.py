@@ -1,6 +1,7 @@
 from copy import copy, deepcopy
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from dust3r.inference import get_pred_pts3d, find_opt_scaling
 from dust3r.utils.geometry import (
@@ -166,14 +167,8 @@ class SSIM(nn.Module):
 
     def __init__(self):
         super(SSIM, self).__init__()
-        self.mu_x_pool = nn.AvgPool2d(3, 1)
-        self.mu_y_pool = nn.AvgPool2d(3, 1)
-        self.sig_x_pool = nn.AvgPool2d(3, 1)
-        self.sig_y_pool = nn.AvgPool2d(3, 1)
-        self.sig_xy_pool = nn.AvgPool2d(3, 1)
-
+        self.pool = nn.AvgPool2d(3, 1)
         self.refl = nn.ReflectionPad2d(1)
-
         self.C1 = 0.01**2
         self.C2 = 0.03**2
 
@@ -181,12 +176,12 @@ class SSIM(nn.Module):
         x = self.refl(x)
         y = self.refl(y)
 
-        mu_x = self.mu_x_pool(x)
-        mu_y = self.mu_y_pool(y)
+        mu_x = self.pool(x)
+        mu_y = self.pool(y)
 
-        sigma_x = self.sig_x_pool(x**2) - mu_x**2
-        sigma_y = self.sig_y_pool(y**2) - mu_y**2
-        sigma_xy = self.sig_xy_pool(x * y) - mu_x * mu_y
+        sigma_x = self.pool(x**2) - mu_x**2
+        sigma_y = self.pool(y**2) - mu_y**2
+        sigma_xy = self.pool(x * y) - mu_x * mu_y
 
         SSIM_n = (2 * mu_x * mu_y + self.C1) * (2 * sigma_xy + self.C2)
         SSIM_d = (mu_x**2 + mu_y**2 + self.C1) * (sigma_x + sigma_y + self.C2)
@@ -216,6 +211,297 @@ class RGBLoss(Criterion, MultiLoss):
             details[f"pred_rgb_{i+1}"] = pred_rgbs[i]
         rgb_loss = sum(ls) / len(ls)
         return rgb_loss, details
+
+
+class RayConsistencyLoss(MultiLoss):
+    """Cosine-similarity loss on predicted ray directions vs. ground-truth ray map.
+
+    Forces the DualDPT aux branch to learn geometrically correct pixel-ray
+    directions *independently* of depth scale.  Requires the head to expose
+    ``unit_rays`` (i.e. ``F.normalize`` must have been applied in the head —
+    see ``dualdpt_head.py``).
+
+    Expected view-dict keys
+    -----------------------
+    ``gts[i]["ray_map"]``    : ``[B, H, W, 6]`` — channels 0:3 = ray origin,
+                               channels 3:6 = GT unit ray direction in camera space.
+    ``gts[i]["ray_mask"]``   : ``[B]`` bool — True when this sample has a valid
+                               ray_map.  Missing → all samples treated as valid.
+    ``gts[i]["valid_mask"]`` : ``[B, H, W]`` bool — per-pixel validity mask
+                               (sky, OOB pixels etc.).  Missing → all pixels valid.
+
+    The loss is skipped silently for any view where the pred dict does not
+    contain ``unit_rays`` (e.g. when training with a non-DualDPT head).
+    """
+
+    def __init__(self, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+
+    def get_name(self) -> str:
+        return type(self).__name__
+
+    def compute_loss(self, gts, preds, **kw):
+        ray_terms = []
+        details: dict = {}
+
+        for i, (gt, pred) in enumerate(zip(gts, preds)):
+            unit_rays = pred.get("unit_rays", None)   # [B, H, W, 3]  or None
+            if unit_rays is None:
+                # Head doesn't produce unit_rays — skip silently.
+                continue
+
+            ray_map = gt.get("ray_map", None)          # [B, H, W, 6]
+            if ray_map is None:
+                continue
+
+            # GT ray direction: channels 3:6  (origin = 0:3, direction = 3:6)
+            ray_dir_gt = ray_map[..., 3:6].to(unit_rays.dtype)  # [B, H, W, 3]
+
+            # --- Build a combined pixel-level validity mask ---
+            valid_mask = gt.get("valid_mask", None)
+            if valid_mask is not None:
+                pixel_valid = valid_mask.bool()            # [B, H, W]
+            else:
+                pixel_valid = torch.ones(
+                    unit_rays.shape[:3], dtype=torch.bool, device=unit_rays.device
+                )
+
+            ray_mask = gt.get("ray_mask", None)        # [B]
+            if ray_mask is not None:
+                # Broadcast [B] → [B, H, W]
+                pixel_valid = pixel_valid & ray_mask[:, None, None].bool()
+
+            if not pixel_valid.any():
+                details[f"{self.get_name()}/{i + 1}"] = 0.0
+                continue
+
+            # Cosine similarity on valid pixels only                              [N, 3]
+            cos_sim = F.cosine_similarity(
+                unit_rays[pixel_valid],
+                F.normalize(ray_dir_gt[pixel_valid], dim=-1, eps=self.eps),
+                dim=-1,
+                eps=self.eps,
+            )
+            # 1 - cos: 0 when perfectly aligned, 2 when antiparallel
+            ray_loss_i = (1.0 - cos_sim).mean()
+            ray_terms.append(ray_loss_i)
+            details[f"{self.get_name()}/{i + 1}"] = float(ray_loss_i)
+
+        if ray_terms:
+            total = torch.stack(ray_terms).mean()
+        else:
+            # No valid view contributed — return a zero on the correct device.
+            _ref = next(
+                (p["unit_rays"] for p in preds if "unit_rays" in p),
+                preds[0]["pts3d_in_self_view"],
+            )
+            total = _ref.new_zeros(())
+
+        details[self.get_name()] = float(total)
+        return total, details
+
+
+class EncoderFeatureConsistencyLoss(MultiLoss):
+    """Simple encoder-side objective for training with `_forward_encoder()` only.
+
+    It combines:
+      1) temporal smoothness on consecutive view descriptors,
+      2) variance regularization to avoid feature collapse.
+    """
+
+    def __init__(
+        self,
+        temporal_weight=1.0,
+        variance_weight=0.1,
+        min_std=0.05,
+        eps=1e-6,
+    ):
+        super().__init__()
+        self.temporal_weight = temporal_weight
+        self.variance_weight = variance_weight
+        self.min_std = min_std
+        self.eps = eps
+
+    def get_name(self):
+        return type(self).__name__
+
+    def compute_loss(self, gts, enc_feats, **kw):
+        # enc_feats: list[num_views] of [B, num_tokens, C]
+        pooled_feats = []
+        view_masks = []
+        for i, feat in enumerate(enc_feats):
+            global_feat = feat.mean(dim=1)
+            global_feat = F.normalize(global_feat, dim=-1, eps=self.eps)
+            pooled_feats.append(global_feat)
+            view_masks.append(
+                gts[i].get(
+                    "img_mask",
+                    torch.ones(
+                        global_feat.shape[0],
+                        dtype=torch.bool,
+                        device=global_feat.device,
+                    ),
+                ).bool()
+            )
+
+        temporal_terms = []
+        for i in range(1, len(pooled_feats)):
+            valid = view_masks[i - 1] & view_masks[i]
+            if valid.any():
+                diff = (pooled_feats[i] - pooled_feats[i - 1]).pow(2).mean(dim=-1)
+                temporal_terms.append(diff[valid].mean())
+
+        if temporal_terms:
+            temporal_loss = torch.stack(temporal_terms).mean()
+        else:
+            temporal_loss = pooled_feats[0].new_zeros(())
+
+        stacked_feats = torch.cat(pooled_feats, dim=0)
+        feat_std = stacked_feats.std(dim=0)
+        variance_loss = F.relu(self.min_std - feat_std).mean()
+
+        loss = (
+            self.temporal_weight * temporal_loss
+            + self.variance_weight * variance_loss
+        )
+        details = {
+            f"{self.get_name()}/temporal": float(temporal_loss),
+            f"{self.get_name()}/variance": float(variance_loss),
+            self.get_name(): float(loss),
+        }
+        return loss, details
+
+
+class EncoderPoseWeightedTemporalLoss(MultiLoss):
+    """Geometry-aware encoder auxiliary loss.
+
+    Penalizes temporal feature changes more strongly when inter-view motion is
+    small, and less when motion is large.
+    """
+
+    def __init__(
+        self,
+        decay=2.0,
+        trans_weight=1.0,
+        rot_weight=0.25,
+        weighting="inverse",
+        min_pair_weight=0.05,
+        eps=1e-6,
+    ):
+        super().__init__()
+        self.decay = decay
+        self.trans_weight = trans_weight
+        self.rot_weight = rot_weight
+        self.weighting = weighting
+        self.min_pair_weight = min_pair_weight
+        self.eps = eps
+
+    def get_name(self):
+        return type(self).__name__
+
+    def _pool_feats(self, gts, enc_feats):
+        pooled_feats = []
+        view_masks = []
+        for i, feat in enumerate(enc_feats):
+            global_feat = feat.mean(dim=1)
+            global_feat = F.normalize(global_feat, dim=-1, eps=self.eps)
+            pooled_feats.append(global_feat)
+            view_masks.append(
+                gts[i].get(
+                    "img_mask",
+                    torch.ones(
+                        global_feat.shape[0],
+                        dtype=torch.bool,
+                        device=global_feat.device,
+                    ),
+                ).bool()
+            )
+        return pooled_feats, view_masks
+
+    def _relative_motion(self, prev_pose, curr_pose):
+        prev_enc = camera_to_pose_encoding(prev_pose)
+        curr_enc = camera_to_pose_encoding(curr_pose)
+        t1, q1 = prev_enc[:, :3], prev_enc[:, 3:7]
+        t2, q2 = curr_enc[:, :3], curr_enc[:, 3:7]
+        t_rel, q_rel = relative_pose_absT_quatR(t1, q1, t2, q2)
+        trans_mag = t_rel.norm(dim=-1)
+        sin_half = q_rel[:, 1:].norm(dim=-1)
+        cos_half = q_rel[:, 0].abs().clamp(min=self.eps)
+        rot_angle = 2.0 * torch.atan2(sin_half, cos_half)
+        return trans_mag, rot_angle
+
+    def _pair_weight(self, motion_mag):
+        if self.weighting == "exp":
+            pair_weight = torch.exp(-self.decay * motion_mag)
+        elif self.weighting == "inverse":
+            pair_weight = 1.0 / (1.0 + self.decay * motion_mag)
+        else:
+            raise ValueError(f"Unknown weighting mode: {self.weighting}")
+        if self.min_pair_weight is not None:
+            pair_weight = pair_weight.clamp(min=float(self.min_pair_weight))
+        return pair_weight
+
+    def compute_loss(self, gts, enc_feats, **kw):
+        if len(enc_feats) < 2:
+            zero = enc_feats[0].new_zeros(()) if len(enc_feats) > 0 else torch.zeros(())
+            details = {
+                f"{self.get_name()}/weighted_temporal": float(zero),
+                f"{self.get_name()}/mean_motion": float(zero),
+                self.get_name(): float(zero),
+            }
+            return zero, details
+
+        pooled_feats, view_masks = self._pool_feats(gts, enc_feats)
+        geo_terms = []
+        mean_motions = []
+        mean_weights = []
+
+        for i in range(1, len(pooled_feats)):
+            valid = view_masks[i - 1] & view_masks[i]
+            if not valid.any():
+                continue
+
+            prev_pose = gts[i - 1].get("camera_pose", None)
+            curr_pose = gts[i].get("camera_pose", None)
+            if prev_pose is None or curr_pose is None:
+                continue
+
+            prev_pose = prev_pose[valid]
+            curr_pose = curr_pose[valid]
+            if prev_pose.numel() == 0 or curr_pose.numel() == 0:
+                continue
+
+            trans_mag, rot_angle = self._relative_motion(prev_pose, curr_pose)
+            motion_mag = self.trans_weight * trans_mag + self.rot_weight * rot_angle
+            pair_weight = self._pair_weight(motion_mag)
+
+            feat_diff = (pooled_feats[i] - pooled_feats[i - 1]).pow(2).mean(dim=-1)
+            feat_diff = feat_diff[valid]
+
+            weighted_term = (pair_weight * feat_diff).sum() / pair_weight.sum().clamp(
+                min=self.eps
+            )
+            geo_terms.append(weighted_term)
+            mean_motions.append(motion_mag.mean())
+            mean_weights.append(pair_weight.mean())
+
+        if geo_terms:
+            geo_loss = torch.stack(geo_terms).mean()
+            mean_motion = torch.stack(mean_motions).mean()
+            mean_weight = torch.stack(mean_weights).mean()
+        else:
+            geo_loss = pooled_feats[0].new_zeros(())
+            mean_motion = pooled_feats[0].new_zeros(())
+            mean_weight = pooled_feats[0].new_zeros(())
+
+        details = {
+            f"{self.get_name()}/weighted_temporal": float(geo_loss),
+            f"{self.get_name()}/mean_motion": float(mean_motion),
+            f"{self.get_name()}/mean_pair_weight": float(mean_weight),
+            self.get_name(): float(geo_loss),
+        }
+        return geo_loss, details
 
 
 class DepthScaleShiftInvLoss(BaseCriterion):
@@ -602,7 +888,7 @@ class Regr3DPose(Criterion, MultiLoss):
                 norm_factor_pr[~not_metric_mask] - norm_factor_gt[~not_metric_mask]
             ).mean()
         else:
-            pts_scale_loss = 0.0
+            pts_scale_loss = preds[0]["pts3d_in_other_view"].new_zeros(())
 
         norm_factor_gt = norm_factor_gt.clip(eps)
         norm_factor_pr = norm_factor_pr.clip(eps)
@@ -648,7 +934,7 @@ class Regr3DPose(Criterion, MultiLoss):
                 - pose_norm_factor_gt[~not_metric_mask]
             ).mean()
         else:
-            pose_scale_loss = 0.0
+            pose_scale_loss = pose_norm_factor_pr.new_zeros(())
         gt_poses = [
             (gt[:, :3] / pose_norm_factor_gt.clip(eps), gt[:, 3:]) for gt in gt_poses
         ]
@@ -744,14 +1030,21 @@ class Regr3DPose(Criterion, MultiLoss):
         gt_quats = torch.stack([gt[1] for gt in gt_poses], dim=1)  # BXNX3
         pred_trans = torch.stack([pr[0] for pr in pred_poses], dim=1)  # BxNx4
         pred_quats = torch.stack([pr[1] for pr in pred_poses], dim=1)  # BxNx4
-        if masks == None:
+        if masks is None:
             pose_loss = (
                 torch.norm(pred_trans - gt_trans, dim=-1).mean()
                 + torch.norm(pred_quats - gt_quats, dim=-1).mean()
             )
         else:
-            if not any(masks):
-                return torch.tensor(0.0)
+            if not torch.is_tensor(masks):
+                masks = torch.as_tensor(masks, device=pred_trans.device)
+            masks = masks.to(device=pred_trans.device).bool()
+            if masks.ndim == 0:
+                if not bool(masks.item()):
+                    return pred_trans.new_zeros(())
+                masks = masks.unsqueeze(0)
+            if not torch.any(masks):
+                return pred_trans.new_zeros(())
             pose_loss = (
                 torch.norm(pred_trans - gt_trans, dim=-1)[masks].mean()
                 + torch.norm(pred_quats - gt_quats, dim=-1)[masks].mean()

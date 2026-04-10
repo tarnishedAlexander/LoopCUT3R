@@ -10,9 +10,16 @@ from models.blocks import PatchEmbed  # noqa
 
 
 def get_patch_embed(patch_embed_cls, img_size, patch_size, enc_embed_dim, in_chans=3):
-    assert patch_embed_cls in ["PatchEmbedDust3R", "ManyAR_PatchEmbed"]
-    patch_embed = eval(patch_embed_cls)(img_size, patch_size, in_chans, enc_embed_dim)
-    return patch_embed
+    registry = {
+        "PatchEmbedDust3R": PatchEmbedDust3R,
+        "ManyAR_PatchEmbed": ManyAR_PatchEmbed,
+    }
+    if patch_embed_cls not in registry:
+        supported = ", ".join(sorted(registry.keys()))
+        raise ValueError(
+            f"Unknown patch_embed_cls '{patch_embed_cls}'. Supported values: {supported}"
+        )
+    return registry[patch_embed_cls](img_size, patch_size, in_chans, enc_embed_dim)
 
 
 class PatchEmbedDust3R(PatchEmbed):
@@ -70,7 +77,7 @@ class ManyAR_PatchEmbed(PatchEmbed):
 
         height, width = true_shape.T
 
-        is_landscape = torch.ones_like(width, dtype=torch.bool)
+        is_landscape = width >= height
         is_portrait = ~is_landscape
 
         x = img.new_zeros((B, n_tokens, self.embed_dim))

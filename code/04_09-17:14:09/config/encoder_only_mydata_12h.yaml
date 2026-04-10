@@ -1,0 +1,80 @@
+# 12-hour encoder-only training config (5-6GB GPU friendly)
+# Goal: run reliably for long training, then analyze layer similarity.
+
+model: "ARCroco3DStereo(ARCroco3DStereoConfig(freeze='decoder', state_size=256, state_pe='2d', pos_embed='RoPE100', rgb_head=True, pose_head=True, img_size=(160, 160), head_type='linear', output_mode='pts3d+pose', depth_mode=('exp', -inf, inf), conf_mode=('exp', 1, inf), pose_mode=('exp', -inf, inf), enc_embed_dim=384, enc_depth=8, enc_num_heads=6, dec_embed_dim=256, dec_depth=4, dec_num_heads=8))"
+
+pretrained: null
+load_only_encoder: False
+resume: null
+
+encoder_only_training: True
+encoder_geo_aux_weight: 0.05
+encoder_geo_aux_decay: 2.0
+encoder_geo_aux_trans_weight: 1.0
+encoder_geo_aux_rot_weight: 0.25
+encoder_geo_aux_weighting: inverse
+encoder_geo_aux_min_pair_weight: 0.05
+encoder_train_criterion: "EncoderFeatureConsistencyLoss(temporal_weight=1.0, variance_weight=0.1, min_std=0.05) + ${encoder_geo_aux_weight}*EncoderPoseWeightedTemporalLoss(decay=${encoder_geo_aux_decay}, trans_weight=${encoder_geo_aux_trans_weight}, rot_weight=${encoder_geo_aux_rot_weight}, weighting='${encoder_geo_aux_weighting}', min_pair_weight=${encoder_geo_aux_min_pair_weight})"
+encoder_test_criterion: "EncoderFeatureConsistencyLoss(temporal_weight=1.0, variance_weight=0.1, min_std=0.05) + ${encoder_geo_aux_weight}*EncoderPoseWeightedTemporalLoss(decay=${encoder_geo_aux_decay}, trans_weight=${encoder_geo_aux_trans_weight}, rot_weight=${encoder_geo_aux_rot_weight}, weighting='${encoder_geo_aux_weighting}', min_pair_weight=${encoder_geo_aux_min_pair_weight})"
+
+# kept for compatibility
+train_criterion: ConfLoss(Regr3DPose(L21, norm_mode='?avg_dis'), alpha=0.2) + RGBLoss(MSE)
+test_criterion: Regr3DPose(L21, norm_mode='?avg_dis', gt_scale=True, sky_loss_value=0)
+
+long_context: False
+fixed_length: True
+benchmark: True
+
+num_views: 6
+num_test_views: 6
+n_corres_train: 0
+n_corres_test: 0
+
+data_root: ${oc.env:CUT3R_DATA_ROOT,../../dataset}
+dataset1: MVS_Synth_Multi(allow_repeat=True, split='train', ROOT='${data_root}/processed_mvs_synth', aug_crop=8, resolution=192, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+
+# Sized for long run duration with stable memory usage
+train_dataset: 16000 @ ${dataset1}
+test_dataset: 200 @ MVS_Synth_Multi(allow_repeat=False, split='train', ROOT='${data_root}/processed_mvs_synth', aug_crop=8, resolution=192, transform=SeqColorJitter, num_views=${num_test_views}, n_corres=${n_corres_test}, seed=42)
+
+seed: 0
+batch_size: 2
+accum_iter: 8
+gradient_checkpointing: True
+epochs: 24
+
+start_epoch: 0
+weight_decay: 0.05
+lr: 2e-5
+min_lr: 1e-6
+warmup_epochs: 1
+amp: 1
+mixed_precision: fp16
+optimizer: adamw
+force_cpu: False
+
+num_workers: 4
+world_size: 1
+local-rank: -1
+dist_url: 'env://'
+rank: 0
+gpu: 0
+distributed: False
+dist_backend: 'nccl'
+
+eval_freq: 2
+save_freq: 1
+keep_freq: 4
+print_freq: 20
+print_img_freq: 50000000
+num_imgs_vis: 2
+save_dir: 'checkpoints'
+exp_name: 'loopcut3r_encoder_12h'
+task: 'cut3r'
+logdir: ./${save_dir}/${exp_name}/logs
+output_dir: ./${save_dir}/${exp_name}/
+
+hydra:
+  verbose: True
+  run:
+    dir: ./${save_dir}/${exp_name}

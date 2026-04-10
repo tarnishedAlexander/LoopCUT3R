@@ -1,11 +1,20 @@
 import tqdm
 import torch
+from contextlib import nullcontext
 from dust3r.utils.device import to_cpu, collate_with_cat
 from dust3r.utils.misc import invalid_to_nans
 from dust3r.utils.geometry import depthmap_to_pts3d, geotrf
 from dust3r.model import ARCroco3DStereo
 from accelerate import Accelerator
 import re
+
+
+def _autocast(enabled: bool):
+    if not enabled:
+        return nullcontext()
+    if torch.cuda.is_available():
+        return torch.amp.autocast("cuda", enabled=True)
+    return nullcontext()
 
 
 def custom_sort_key(key):
@@ -52,6 +61,39 @@ def make_batch_symmetric(batch):
     return view1, view2
 
 
+def _move_batch_to_model(batch, model):
+    """Move batch tensors to model device and align floating dtypes.
+
+    This avoids dtype mismatches when model weights are in fp16/bf16 while
+    dataloader tensors remain fp32.
+    """
+    model_param = next(model.parameters())
+    model_device = model_param.device
+    model_dtype = model_param.dtype
+    ignore_keys = set(["depthmap", "dataset", "label", "instance", "idx", "rng"])
+
+    for view in batch:
+        for name in list(view.keys()):
+            if name in ignore_keys:
+                continue
+            value = view[name]
+            if torch.is_tensor(value):
+                value = value.to(model_device, non_blocking=True)
+                if torch.is_floating_point(value):
+                    value = value.to(dtype=model_dtype)
+                view[name] = value
+            elif isinstance(value, (list, tuple)):
+                updated = []
+                for x in value:
+                    if torch.is_tensor(x):
+                        x = x.to(model_device, non_blocking=True)
+                        if torch.is_floating_point(x):
+                            x = x.to(dtype=model_dtype)
+                    updated.append(x)
+                view[name] = updated
+    return batch
+
+
 def loss_of_one_batch(
     batch,
     model,
@@ -67,10 +109,13 @@ def loss_of_one_batch(
         assert (
             symmetrize_batch is False
         ), "cannot symmetrize batch with more than 2 views"
+
+    batch = _move_batch_to_model(batch, model)
+
     if symmetrize_batch:
         batch = make_batch_symmetric(batch)
 
-    with torch.cuda.amp.autocast(enabled=not inference):
+    with _autocast(enabled=not inference):
         if inference:
             output, state_args = model(batch, ret_state=True)
             preds, batch = output.ress, output.views
@@ -80,10 +125,46 @@ def loss_of_one_batch(
             output = model(batch)
             preds, batch = output.ress, output.views
 
-        with torch.cuda.amp.autocast(enabled=False):
+        with _autocast(enabled=False):
             loss = criterion(batch, preds) if criterion is not None else None
 
     result = dict(views=batch, pred=preds, loss=loss)
+    return result[ret] if ret else result
+
+
+def loss_of_one_batch_encoder(
+    batch,
+    model,
+    criterion,
+    accelerator: Accelerator,
+    use_amp=False,
+    ret=None,
+):
+    ignore_keys = set(
+        ["depthmap", "dataset", "label", "instance", "idx", "true_shape", "rng"]
+    )
+    model_device = next(model.parameters()).device
+    for view in batch:
+        for name in view.keys():
+            if name in ignore_keys:
+                continue
+            if isinstance(view[name], tuple) or isinstance(view[name], list):
+                view[name] = [x.to(model_device, non_blocking=True) for x in view[name]]
+            elif torch.is_tensor(view[name]):
+                view[name] = view[name].to(model_device, non_blocking=True)
+
+    with _autocast(enabled=use_amp):
+        unwrapped_model = accelerator.unwrap_model(model)
+        if hasattr(unwrapped_model, "forward_encoder_recurrent"):
+            (feat, pos, shape), _ = unwrapped_model.forward_encoder_recurrent(
+                batch, ret_state=True
+            )
+        else:
+            (feat, pos, shape), _ = unwrapped_model._forward_encoder(batch)
+        with _autocast(enabled=False):
+            loss = criterion(batch, feat) if criterion is not None else None
+
+    result = dict(views=batch, enc_feat=feat, enc_pos=pos, enc_shape=shape, loss=loss)
     return result[ret] if ret else result
 
 
@@ -106,12 +187,15 @@ def loss_of_one_batch_tbptt(
         assert (
             symmetrize_batch is False
         ), "cannot symmetrize batch with more than 2 views"
+
+    batch = _move_batch_to_model(batch, model)
+
     if symmetrize_batch:
         batch = make_batch_symmetric(batch)
     all_preds = []
     all_loss = 0.0
     all_loss_details = {}
-    with torch.cuda.amp.autocast(enabled=not inference):
+    with _autocast(enabled=not inference):
         with torch.no_grad():
             (feat, pos, shape), (
                 init_state_feat,
@@ -155,7 +239,7 @@ def loss_of_one_batch_tbptt(
                         preds.append(res)
                         all_preds.append({k: v.detach() for k, v in res.items()})
                         chunk.append(batch[i])
-                with torch.cuda.amp.autocast(enabled=False):
+                with _autocast(enabled=False):
                     loss, loss_details = (
                         criterion(chunk, preds, camera1=batch[0]["camera_pose"])
                         if criterion is not None
@@ -188,7 +272,7 @@ def loss_of_one_batch_tbptt(
                     preds.append(res)
                     all_preds.append({k: v.detach() for k, v in res.items()})
                     chunk.append(batch[i])
-                with torch.cuda.amp.autocast(enabled=False):
+                with _autocast(enabled=False):
                     loss, loss_details = (
                         criterion(chunk, preds, camera1=batch[0]["camera_pose"])
                         if criterion is not None
@@ -251,7 +335,7 @@ def inference_step(view, state_args, model, device, verbose=True):
         else:
             view[name] = view[name].to(device, non_blocking=True)
 
-    with torch.cuda.amp.autocast(enabled=False):
+    with _autocast(enabled=False):
         state_feat, state_pos, init_state_feat, mem, init_mem = state_args
         pred, _ = model.inference_step(
             view, state_feat, state_pos, init_state_feat, mem, init_mem
@@ -279,7 +363,7 @@ def inference_recurrent(groups, model, device, verbose=True):
     if verbose:
         print(f">> Inference with model on {len(groups)} image/raymaps")
 
-    with torch.cuda.amp.autocast(enabled=False):
+    with _autocast(enabled=False):
         preds, batch, state_args = model.forward_recurrent(
             groups, device, ret_state=True
         )

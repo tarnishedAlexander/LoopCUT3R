@@ -1,0 +1,76 @@
+# Recurrent backbone with LoopCUT3R new heads/losses
+# Same recurrence schedule as dualdpt_3blocks_2day_aggressive.
+
+variant: loop_new
+
+model: "ARCroco3DStereo(ARCroco3DStereoConfig(freeze='encoder', state_size=576, state_pe='2d', pos_embed='RoPE100', rgb_head=True, pose_head=True, img_size=(96, 96), head_type='dualdpt', output_mode='pts3d+pose', depth_mode=('exp', -inf, inf), conf_mode=('exp', 1, inf), pose_mode=('exp', -inf, inf), enc_embed_dim=768, enc_depth=9, enc_num_heads=12, dec_embed_dim=512, dec_depth=9, dec_num_heads=16, num_blocks=3, num_steps=3, use_tbptl=True, tbptl_warmup=1, tbptl_thinking=1, tbptl_grad_steps=2, recurrent_t_scale=False, recurrent_swiglu=False, ls_init=1e-5, dec_num_blocks_img=3, dec_num_steps_img=9, dec_num_blocks_state=3, dec_num_steps_state=9, dec_use_tbptl=True, dec_tbptl_warmup=1, dec_tbptl_thinking=1, dec_tbptl_grad_steps=2))"
+
+pretrained: null
+load_only_encoder: False
+resume: null
+auto_resume: False
+
+encoder_only_training: False
+train_criterion: "ConfLoss(Regr3DPose(L21, norm_mode='?avg_dis'), alpha=0.2) + RGBLoss(MSE) + 0.1 * RayConsistencyLoss()"
+test_criterion: "Regr3DPose(L21, norm_mode='?avg_dis', gt_scale=True, sky_loss_value=0) + RGBLoss(L21)"
+
+long_context: False
+fixed_length: True
+benchmark: False
+
+num_views: 2
+num_test_views: 2
+n_corres_train: 0
+n_corres_test: 0
+
+mvs_root: ${oc.env:CUT3R_MVS_ROOT,/app/recurrentTransformer/dataset/distill_croco/processed_mvs_synth}
+vkitti_root: ${oc.env:CUT3R_VKITTI_ROOT,/app/recurrentTransformer/dataset/vkitti_2.0.3_mixed}
+dataset1: MVS_Synth_Multi(allow_repeat=True, split='train', ROOT='${mvs_root}', aug_crop=8, resolution=96, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset2: VirtualKITTI2_Multi(allow_repeat=True, split='train', ROOT='${vkitti_root}', aug_crop=8, resolution=96, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+train_dataset: 4000 @ ${dataset1} + 4000 @ ${dataset2}
+
+test_dataset1: 20 @ MVS_Synth_Multi(allow_repeat=False, split='train', ROOT='${mvs_root}', aug_crop=8, resolution=96, transform=SeqColorJitter, num_views=${num_test_views}, n_corres=${n_corres_test}, seed=42)
+test_dataset2: 20 @ VirtualKITTI2_Multi(allow_repeat=False, split='train', ROOT='${vkitti_root}', aug_crop=8, resolution=96, transform=SeqColorJitter, num_views=${num_test_views}, n_corres=${n_corres_test}, seed=42)
+test_dataset: ${test_dataset1} + ${test_dataset2}
+
+seed: 0
+batch_size: 2
+accum_iter: 8
+gradient_checkpointing: False
+epochs: 100
+
+start_epoch: 0
+weight_decay: 0.05
+lr: 1e-5
+min_lr: 1e-6
+warmup_epochs: 1.0
+amp: 1
+mixed_precision: fp16
+optimizer: adamw
+force_cpu: False
+
+num_workers: 8
+world_size: 1
+local-rank: -1
+dist_url: 'env://'
+rank: 0
+gpu: 0
+distributed: False
+dist_backend: 'nccl'
+
+eval_freq: 8
+save_freq: 8
+keep_freq: 16
+print_freq: 20
+print_img_freq: 50000000
+num_imgs_vis: 2
+save_dir: 'checkpoints'
+exp_name: 'recurrent_2day_loop_new_headloss'
+task: 'cut3r'
+logdir: ./${save_dir}/${exp_name}/logs
+output_dir: ./${save_dir}/${exp_name}/
+
+hydra:
+  verbose: True
+  run:
+    dir: ./${save_dir}/${exp_name}

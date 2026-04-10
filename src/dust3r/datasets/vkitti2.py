@@ -16,12 +16,43 @@ class VirtualKITTI2_Multi(BaseMultiViewDataset):
 
     def __init__(self, ROOT, *args, **kwargs):
         self.ROOT = ROOT
+        self.rgb_root_candidates = [
+            ROOT.replace("vkitti_2.0.3_mixed", "vkitti_2.0.3_rgb"),
+            ROOT.replace("dataset/vkitti_2.0.3_mixed", "dataset/distill_croco/vkitti_2.0.3_rgb"),
+            osp.join(osp.dirname(ROOT), "vkitti_2.0.3_rgb"),
+            osp.join(osp.dirname(ROOT), "distill_croco", "vkitti_2.0.3_rgb"),
+        ]
+        self.depth_root_candidates = [
+            ROOT.replace("vkitti_2.0.3_mixed", "vkitti_2.0.3_depth"),
+            ROOT.replace("dataset/vkitti_2.0.3_mixed", "dataset/vkitti_2.0.3_depth"),
+            osp.join(osp.dirname(ROOT), "vkitti_2.0.3_depth"),
+        ]
         self.video = True
         self.is_metric = True
         self.max_interval = 5
         super().__init__(*args, **kwargs)
         # loading all
         self._load_data(self.split)
+
+    def _resolve_vkitti_paths(self, scene_rel, cam, basename):
+        mixed_scene_dir = osp.join(self.ROOT, scene_rel, cam)
+        mixed_rgb = osp.join(mixed_scene_dir, basename + "_rgb.jpg")
+        mixed_depth = osp.join(mixed_scene_dir, basename + "_depth.png")
+
+        if osp.exists(mixed_rgb) and osp.exists(mixed_depth):
+            return mixed_rgb, mixed_depth
+
+        raw_rgb_name = f"rgb_{basename}.jpg"
+        raw_depth_name = f"depth_{basename}.png"
+
+        for rgb_root in self.rgb_root_candidates:
+            for depth_root in self.depth_root_candidates:
+                rgb_path = osp.join(rgb_root, scene_rel, "frames", "rgb", cam, raw_rgb_name)
+                depth_path = osp.join(depth_root, scene_rel, "frames", "depth", cam, raw_depth_name)
+                if osp.exists(rgb_path) and osp.exists(depth_path):
+                    return rgb_path, depth_path
+
+        return mixed_rgb, mixed_depth
 
     def _load_data(self, split=None):
         scene_dirs = sorted(
@@ -55,13 +86,18 @@ class VirtualKITTI2_Multi(BaseMultiViewDataset):
         for seq_idx, seq in enumerate(seq_dirs):
             seq_path = osp.join(self.ROOT, seq)
             for cam in ["Camera_0", "Camera_1"]:
+                cam_dir = osp.join(seq_path, cam)
+                if not osp.isdir(cam_dir):
+                    continue
+
                 basenames = sorted(
-                    [
-                        f[:5]
-                        for f in os.listdir(seq_path + "/" + cam)
-                        if f.endswith(".jpg")
-                    ]
+                    {f[:5] for f in os.listdir(cam_dir) if f.endswith("_cam.npz")}
                 )
+                if len(basenames) == 0:
+                    basenames = sorted(
+                        {f[:5] for f in os.listdir(cam_dir) if f.endswith(".jpg")}
+                    )
+
                 num_imgs = len(basenames)
                 cut_off = (
                     self.num_views
@@ -69,7 +105,7 @@ class VirtualKITTI2_Multi(BaseMultiViewDataset):
                     else max(self.num_views // 3, 3)
                 )
                 if num_imgs < cut_off:
-                    print(f"Skipping {scene}")
+                    print(f"Skipping {seq}/{cam}: frames={num_imgs}")
                     continue
                 img_ids = list(np.arange(num_imgs) + offset)
                 start_img_ids_ = img_ids[: num_imgs - cut_off + 1]
@@ -116,14 +152,17 @@ class VirtualKITTI2_Multi(BaseMultiViewDataset):
 
         for v, view_idx in enumerate(image_idxs):
             scene_id = self.sceneids[view_idx]
+            scene_rel = self.scenes[scene_id].rsplit("/", 1)[0]
+            cam = self.scenes[scene_id].rsplit("/", 1)[1]
             scene_dir = osp.join(self.ROOT, self.scenes[scene_id])
             basename = self.images[view_idx]
 
             img = basename + "_rgb.jpg"
-            image = imread_cv2(osp.join(scene_dir, img))
+            rgb_path, depth_path = self._resolve_vkitti_paths(scene_rel, cam, basename)
+            image = imread_cv2(rgb_path)
             depthmap = (
                 cv2.imread(
-                    osp.join(scene_dir, basename + "_depth.png"),
+                    depth_path,
                     cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH,
                 ).astype(np.float32)
                 / 100.0

@@ -16,6 +16,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from itertools import repeat
 import collections.abc
@@ -122,9 +123,10 @@ class Attention(nn.Module):
         q_type = q.dtype
         k_type = k.dtype
         if self.rope is not None:
-            q = q.to(torch.float16)
-            k = k.to(torch.float16)
-            with torch.autocast(device_type="cuda", enabled=False):
+            _dev_type = q.device.type
+            q = q.float()
+            k = k.float()
+            with torch.autocast(device_type=_dev_type, enabled=False):
                 q = self.rope(q, xpos)
                 k = self.rope(k, xpos)
             q = q.to(q_type)
@@ -233,15 +235,16 @@ class CrossAttention(nn.Module):
         q_type = q.dtype
         k_type = k.dtype
         if self.rope is not None:
+            _dev_type = q.device.type
             if qpos is not None:
-                q = q.to(torch.float16)
-                with torch.autocast(device_type="cuda", enabled=False):
+                q = q.float()
+                with torch.autocast(device_type=_dev_type, enabled=False):
                     q = self.rope(q, qpos)
                 q = q.to(q_type)
 
             if kpos is not None:
-                k = k.to(torch.float16)
-                with torch.autocast(device_type="cuda", enabled=False):
+                k = k.float()
+                with torch.autocast(device_type=_dev_type, enabled=False):
                     k = self.rope(k, kpos)
                 k = k.to(k_type)
 
@@ -383,3 +386,87 @@ class PatchEmbed(nn.Module):
     def _init_weights(self):
         w = self.proj.weight.data
         torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+
+class LayerScale(nn.Module):
+    def __init__(self, dim, init_values=1e-5):
+        super().__init__()
+        self.gamma = nn.Parameter(init_values * torch.ones(dim))
+
+    def forward(self, x):
+        return x * self.gamma
+
+
+class SwiGLU(nn.Module):
+    def forward(self, x):
+        x1, x2 = x.chunk(2, dim=-1)
+        return F.silu(x1) * x2
+
+class RecurrentBlock(nn.Module):
+    """Native recurrent backbone block used by CUT3R encoders.
+
+    This block is architecturally aligned with RAPTOR checkpoints and supports
+    optional timestep modulation (`t_scale`) and SwiGLU MLP.
+    """
+
+    def __init__(
+        self,
+        dim=768,
+        num_heads=12,
+        mlp_ratio=4.0,
+        init_values=1e-5,
+        t_scale=False,
+        swiglu=False,
+    ):
+        super().__init__()
+
+        self.t_scale = t_scale
+        self.norm1 = nn.LayerNorm(dim)
+        self.attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
+        self.ls1 = (
+            LayerScale(dim, init_values) if init_values is not None else nn.Identity()
+        )
+
+        self.norm2 = nn.LayerNorm(dim)
+        hid = int(dim * mlp_ratio)
+        if swiglu:
+            self.mlp = nn.Sequential(
+                nn.Linear(dim, hid * 2),
+                SwiGLU(),
+                nn.Linear(hid, dim),
+            )
+        else:
+            self.mlp = nn.Sequential(
+                nn.Linear(dim, hid),
+                nn.GELU(),
+                nn.Linear(hid, dim),
+            )
+        self.ls2 = (
+            LayerScale(dim, init_values) if init_values is not None else nn.Identity()
+        )
+
+        if self.t_scale:
+            self.t_proj = nn.Sequential(
+                nn.Linear(1, 16),
+                nn.SiLU(),
+                nn.Linear(16, 3 * dim),
+            )
+            nn.init.normal_(self.t_proj[-1].weight, mean=0.0, std=1e-4)
+            nn.init.normal_(self.t_proj[-1].bias, mean=0.0, std=1e-4)
+
+    def forward(self, x, xpos=None, t=None, t_integer=None):
+        # `xpos` is accepted for compatibility with CroCo/DUST3R encoder calls.
+        x_norm = self.norm1(x)
+
+        if self.t_scale and t is not None:
+            t = t.unsqueeze(1).unsqueeze(2)
+            t = self.t_proj(t) + 1
+            t1, t2, t3 = t.chunk(3, dim=-1)
+
+            x = x + t1 * self.ls1(self.attn(x_norm, x_norm, x_norm)[0])
+            x = x + t2 * self.ls2(self.mlp(self.norm2(x)))
+            return t3 * x
+
+        x = x + self.ls1(self.attn(x_norm, x_norm, x_norm)[0])
+        x = x + self.ls2(self.mlp(self.norm2(x)))
+        return x
+

@@ -45,3 +45,38 @@ CUDA_LAUNCH_BLOCKING=1 NCCL_DEBUG=TRACE TORCH_DISTRIBUTED_DEBUG=DETAIL HYDRA_FUL
 # finetune 224 checkpoint
 CUDA_LAUNCH_BLOCKING=1 NCCL_DEBUG=TRACE TORCH_DISTRIBUTED_DEBUG=DETAIL HYDRA_FULL_ERROR=1 accelerate launch --multi_gpu train.py  --config-name linear_224_fixed_16
 ```
+
+## Dual Variant Training In The Same Project
+
+LoopCUT3R now supports two selectable head/loss variants while keeping the same recurrent transformer schedule:
+
+- `original_cut3r`: original CUT3R-style heads/losses
+- `loop_new`: LoopCUT3R new heads/losses
+
+Run from `src/`:
+
+```bash
+# Variant A: original CUT3R-style head/loss on recurrent backbone
+HYDRA_FULL_ERROR=1 accelerate launch --multi_gpu train.py \
+	--config-name recurrent_dual_variant_original_cut3r \
+	--variant original_cut3r
+
+# Variant B: LoopCUT3R new head/loss on the same recurrent backbone
+HYDRA_FULL_ERROR=1 accelerate launch --multi_gpu train.py \
+	--config-name recurrent_dual_variant_loop_new \
+	--variant loop_new
+```
+
+Quick validation (no training) before long runs:
+
+```bash
+# Print resolved config for Variant A
+python train.py --config-name recurrent_dual_variant_original_cut3r --cfg job --variant original_cut3r \
+	| grep -E "variant:|model:|train_criterion:|test_criterion:"
+
+# Print resolved config for Variant B
+python train.py --config-name recurrent_dual_variant_loop_new --cfg job --variant loop_new \
+	| grep -E "variant:|model:|train_criterion:|test_criterion:"
+```
+
+`--variant` is optional when the config already sets `variant`, but passing it explicitly is recommended for reproducibility.

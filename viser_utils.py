@@ -334,7 +334,7 @@ class PointCloudViewer:
         image_mask=None,
         edge_color_list=None,
         device="cpu",
-        port=8080,
+        port=8888,
         show_camera=True,
         vis_threshold=1,
         size=512
@@ -360,6 +360,19 @@ class PointCloudViewer:
         self.traj_list = []
         self.orig_img_list = [x[0] for x in color_list]
         self.via_points = []
+
+        # --- normalise scene to ~1-unit depth for display ----------------
+        # Metric checkpoints produce depths of 10-40 m; point_size=0.005 at
+        # that scale is sub-pixel.  We divide all display coordinates by the
+        # median Z so the scene sits in a 0-3 unit range where viser's
+        # default camera and point size work well.
+        all_z = np.concatenate(
+            [pc.reshape(-1, 3)[:, 2] for pc in pc_list], axis=0
+        )
+        finite_z = all_z[np.isfinite(all_z) & (all_z > 0)]
+        median_z = float(np.median(finite_z)) if len(finite_z) > 0 else 1.0
+        self.scene_scale = 1.0 / max(median_z, 1e-6)
+        # -----------------------------------------------------------------
 
         gui_reset_up = self.server.gui.add_button(
             "Reset up direction",
@@ -510,7 +523,7 @@ class PointCloudViewer:
             try:
                 cam = self.get_camera_state(client)
                 cam.fov = 2 * np.arctan(self.size / self.focal_slider.value)
-                cam.aspect = (512 / 384) if self.size==512 else 1.0
+                cam.aspect = (512 / 384) if self.size == 512 else 1.0
                 pose = cam.c2w
                 if self.size == 512:
                     intrins = self.generate_pseudo_intrinsics(384, 512)
@@ -523,7 +536,7 @@ class PointCloudViewer:
                         None
                     ].float()
                 
-                
+
                 view = {
                     "img": torch.full((1, 3, 384, 512), torch.nan) if self.size==512 else torch.full((1, 3, 224, 224), torch.nan),
                     "ray_map": raymap,
@@ -642,6 +655,8 @@ class PointCloudViewer:
             conf = conf[0].reshape(-1)
             pred_pts = pred_pts[conf > self.vis_threshold]
             color = color[conf > self.vis_threshold]
+        # Apply global scene scale so metric depths map to ~1 unit
+        pred_pts = (pred_pts * self.scene_scale).astype(np.float32)
         return pred_pts, color
 
     def add_pc(self, step):
@@ -660,7 +675,7 @@ class PointCloudViewer:
                 name=f"/frames/{step}/pred_pts",
                 points=pred_pts,
                 colors=color,
-                point_size=0.005,
+                point_size=0.02,   # works at scene_scale-normalised coords
             )
         )
 
@@ -670,19 +685,20 @@ class PointCloudViewer:
         pp = cam["pp"][step]
         R = cam["R"][step]
         t = cam["t"][step]
+        t_display = (t * self.scene_scale).astype(np.float32)
 
         q = tf.SO3.from_matrix(R).wxyz
         fov = 2 * np.arctan(pp[0] / focal)
         aspect = pp[0] / pp[1]
-        self.traj_list.append((q, t))
+        self.traj_list.append((q, t_display))
         self.cam_handles.append(
             self.server.add_camera_frustum(
                 name=f"/frames/{step}/camera",
                 fov=fov,
                 aspect=aspect,
                 wxyz=q,
-                position=t,
-                scale=0.1,
+                position=t_display,
+                scale=0.05,  # proportional to normalised scene
                 color=(50, 205, 50),
             )
         )

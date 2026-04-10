@@ -297,6 +297,8 @@ def run_inference(args):
     """
     # Set up the computation device.
     device = args.device
+    if device == "gpu":
+        device = "cuda"  # normalise common alias
     if device == "cuda" and not torch.cuda.is_available():
         print("CUDA not available. Switching to CPU.")
         device = "cpu"

@@ -397,7 +397,7 @@ def save_model(
     best_so_far=None,
 ):
     if accelerator.is_main_process:
-        output_dir = Path(args.output_dir)
+        output_dir = Path(args.output_dir) / "checkpoints"
         if fname is None:
             fname = str(epoch)
         checkpoint_path = output_dir / ("checkpoint-%s.pth" % fname)
@@ -423,7 +423,8 @@ def load_model(args, model_without_ddp, optimizer, loss_scaler):
                 args.resume, map_location="cpu", check_hash=True
             )
         else:
-            checkpoint = torch.load(args.resume, map_location="cpu")
+            checkpoint = torch.load(args.resume, map_location="cpu", weights_only=False)
+
         printer.info("Resume checkpoint %s" % args.resume)
         model_without_ddp.load_state_dict(checkpoint["model"], strict=False)
         args.start_epoch = checkpoint["epoch"] + 1

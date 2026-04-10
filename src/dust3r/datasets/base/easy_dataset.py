@@ -49,6 +49,7 @@ class EasyDataset:
             4 if not fixed_length else num_of_views,
             num_of_views,
             world_size,
+            rank=rank,
             warmup=1,
             drop_last=drop_last,
         )

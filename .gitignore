@@ -53,3 +53,9 @@ docs/_build/
 *.pth
 data
 src/checkpoints
+
+demo_tmp*
+eval_results
+src/checkpoints*
+*.pth
+checkpoints*

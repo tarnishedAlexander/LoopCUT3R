@@ -36,6 +36,96 @@ from .wildrgbd import WildRGBD_Multi  # noqa
 
 
 from accelerate import Accelerator
+from .base.easy_dataset import EasyDataset
+from dust3r.utils.safe_eval import safe_eval_expr
+
+
+class _SamplerSignatureError(RuntimeError):
+    pass
+
+
+def _build_dataset_eval_namespace():
+    namespace = {}
+    excluded = {
+        "Accelerator",
+        "EasyDataset",
+        "BatchedRandomSampler",
+        "get_data_loader",
+        "safe_eval_expr",
+    }
+    for name, value in globals().items():
+        if name.startswith("_") or name in excluded:
+            continue
+        if isinstance(value, type) and issubclass(value, EasyDataset):
+            namespace[name] = value
+            continue
+        if callable(value):
+            namespace[name] = value
+            continue
+        if isinstance(value, (int, float, bool, str)):
+            namespace[name] = value
+    return namespace
+
+
+DATASET_EVAL_NAMESPACE = _build_dataset_eval_namespace()
+
+
+def _get_world_size_and_rank(accelerator: Accelerator):
+    world_size = 1
+    rank = 0
+    if accelerator is None:
+        return world_size, rank
+
+    world_size = int(getattr(accelerator, "num_processes", world_size))
+    rank = int(getattr(accelerator, "process_index", rank))
+    state = getattr(accelerator, "state", None)
+    if state is not None:
+        rank = int(getattr(state, "process_index", rank))
+    return max(world_size, 1), max(rank, 0)
+
+
+def _make_sampler(dataset, batch_size, shuffle, drop_last, world_size, rank, fixed_length):
+    kwargs_candidates = [
+        {
+            "batch_size": batch_size,
+            "shuffle": shuffle,
+            "drop_last": drop_last,
+            "world_size": world_size,
+            "rank": rank,
+            "fixed_length": fixed_length,
+        },
+        {
+            "batch_size": batch_size,
+            "shuffle": shuffle,
+            "drop_last": drop_last,
+            "world_size": world_size,
+            "fixed_length": fixed_length,
+        },
+        {
+            "batch_size": batch_size,
+            "shuffle": shuffle,
+            "drop_last": drop_last,
+            "fixed_length": fixed_length,
+        },
+        {
+            "batch_size": batch_size,
+            "shuffle": shuffle,
+            "drop_last": drop_last,
+        },
+    ]
+
+    last_signature_error = None
+    for kwargs in kwargs_candidates:
+        try:
+            return dataset.make_sampler(**kwargs)
+        except TypeError as exc:
+            message = str(exc)
+            if "unexpected keyword argument" in message:
+                last_signature_error = exc
+                continue
+            raise
+
+    raise _SamplerSignatureError(str(last_signature_error))
 
 
 def get_data_loader(
@@ -52,15 +142,23 @@ def get_data_loader(
 
     # pytorch dataset
     if isinstance(dataset, str):
-        dataset = eval(dataset)
+        dataset = safe_eval_expr(
+            dataset,
+            DATASET_EVAL_NAMESPACE,
+            context="dataset",
+        )
+
+    world_size, rank = _get_world_size_and_rank(accelerator)
 
     try:
-        sampler = dataset.make_sampler(
-            batch_size,
+        sampler = _make_sampler(
+            dataset,
+            batch_size=batch_size,
             shuffle=shuffle,
             drop_last=drop_last,
-            world_size=accelerator.num_processes,
-            fixed_length=fixed_length
+            world_size=world_size,
+            rank=rank,
+            fixed_length=fixed_length,
         )
         shuffle = False
 
@@ -71,7 +169,7 @@ def get_data_loader(
             pin_memory=pin_mem,
         )
 
-    except (AttributeError, NotImplementedError):
+    except (AttributeError, NotImplementedError, _SamplerSignatureError):
         sampler = None
 
         data_loader = torch.utils.data.DataLoader(

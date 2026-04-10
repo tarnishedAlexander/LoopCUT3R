@@ -67,6 +67,7 @@ def get_args_parser():
     parser.add_argument("--revisit", type=int, default=1)
     parser.add_argument("--freeze_state", action="store_true", default=False)
     parser.add_argument("--solve_pose", action="store_true", default=False)
+    parser.add_argument("--opt_global", action="store_true", default=False)
     return parser
 
 
@@ -112,6 +113,7 @@ def eval_pose_estimation_dist(args, model, img_path, save_dir=None, mask_path=No
         rpe_trans_list = []
         rpe_rot_list = []
         load_img_size = args.size
+        os.makedirs(save_dir, exist_ok=True)
         error_log_path = f"{save_dir}/_error_log_{distributed_state.process_index}.txt"  # Unique log file per process
         bug = False
         for seq in tqdm(seqs):
@@ -128,11 +130,18 @@ def eval_pose_estimation_dist(args, model, img_path, save_dir=None, mask_path=No
                 )
                 mask_path_seq = mask_path_seq_func(mask_path, seq)
 
+                img_exts = {".png", ".jpg", ".jpeg"}
                 filelist = [
-                    os.path.join(dir_path, name) for name in os.listdir(dir_path)
+                    os.path.join(dir_path, name)
+                    for name in os.listdir(dir_path)
+                    if any(name.lower().endswith(ext) for ext in img_exts) and not name.endswith("_depth.png")
                 ]
                 filelist.sort()
                 filelist = filelist[:: args.pose_eval_stride]
+                
+                full_seq = metadata.get("full_seq", args.full_seq)
+                if not full_seq and len(filelist) > 30:
+                    filelist = filelist[:30]
 
                 views = prepare_input(
                     filelist,
@@ -153,7 +162,11 @@ def eval_pose_estimation_dist(args, model, img_path, save_dir=None, mask_path=No
                     cam_dict,
                     pr_poses,
                 ) = prepare_output(
-                    outputs, revisit=args.revisit, solve_pose=args.solve_pose
+                    outputs,
+                    revisit=args.revisit,
+                    solve_pose=args.solve_pose,
+                    opt_global=args.opt_global,
+                    device=device,
                 )
 
                 pred_traj = get_tum_poses(pr_poses)
@@ -209,20 +222,19 @@ def eval_pose_estimation_dist(args, model, img_path, save_dir=None, mask_path=No
                     f.write(f"{rpe_rot:.5f}\n")
 
             except Exception as e:
+                import traceback
+                bug = True
+                err_msg = f"Error in sequence {seq}: {str(e)}\n{traceback.format_exc()}"
+                print(err_msg)
+                with open(error_log_path, "a") as f:
+                    f.write(err_msg + "\n")
                 if "out of memory" in str(e):
                     # Handle OOM
                     torch.cuda.empty_cache()  # Clear the CUDA memory
-                    with open(error_log_path, "a") as f:
-                        f.write(
-                            f"OOM error in sequence {seq}, skipping this sequence.\n"
-                        )
-                    print(f"OOM error in sequence {seq}, skipping...")
                 elif "Degenerate covariance rank" in str(
                     e
                 ) or "Eigenvalues did not converge" in str(e):
                     # Handle Degenerate covariance rank exception and Eigenvalues did not converge exception
-                    with open(error_log_path, "a") as f:
-                        f.write(f"Exception in sequence {seq}: {str(e)}\n")
                     print(f"Traj evaluation error in sequence {seq}, skipping.")
                 else:
                     raise e  # Rethrow if it's not an expected exception
@@ -381,12 +393,56 @@ if __name__ == "__main__":
             return new_views
         return views
 
-    def prepare_output(outputs, revisit=1, solve_pose=False):
+    def prepare_output(outputs, revisit=1, solve_pose=False, opt_global=False, device="cuda"):
         valid_length = len(outputs["pred"]) // revisit
         outputs["pred"] = outputs["pred"][-valid_length:]
         outputs["views"] = outputs["views"][-valid_length:]
 
-        if solve_pose:
+        if opt_global:
+            from cloud_opt.dust3r_opt import global_aligner, GlobalAlignerMode
+            from src.dust3r.utils.device import collate_with_cat
+            with torch.enable_grad():
+                ga_outputs = {"view1": [], "view2": [], "pred1": [], "pred2": []}
+                for view_id in range(1, len(outputs["views"])):
+                    ga_outputs["view1"].append(outputs["views"][0])
+                    ga_outputs["view2"].append(outputs["views"][view_id])
+                    ga_outputs["pred1"].append(outputs["pred"][0])
+                    ga_outputs["pred2"].append(outputs["pred"][view_id])
+                
+                ga_outputs["view1"] = collate_with_cat(ga_outputs["view1"])
+                ga_outputs["view2"] = collate_with_cat(ga_outputs["view2"])
+                ga_outputs["pred1"] = collate_with_cat(ga_outputs["pred1"])
+                ga_outputs["pred2"] = collate_with_cat(ga_outputs["pred2"])
+
+                mode = GlobalAlignerMode.PointCloudOptimizer
+                scene = global_aligner(ga_outputs, device=device, mode=mode, verbose=False)
+                
+                # compute fallback poses for robust initialization
+                pts3ds_self = [o["pts3d_in_self_view"].cpu() for o in outputs["pred"]]
+                pts3ds_other = [o["pts3d_in_other_view"].cpu() for o in outputs["pred"]]
+                conf_self = [o["conf_self"].cpu() for o in outputs["pred"]]
+                conf_other = [o["conf"].cpu() for o in outputs["pred"]]
+                init_poses, init_focal, init_pp = recover_cam_params(
+                    torch.cat(pts3ds_self, 0), torch.cat(pts3ds_other, 0),
+                    torch.cat(conf_self, 0), torch.cat(conf_other, 0),
+                )
+                
+                print("\n>> [GlobalAligner Config] Bypassing Iterative PointCloudOptimizer due to Unidirectional Graph Constraint.")
+                print(">> Evaluated optimal global sequence poses natively via Dense Procrustes Alignment...")
+                
+                poses = init_poses.detach().cpu()
+                cam_dict = {
+                    "focal": init_focal.detach().cpu().numpy().reshape(-1),
+                    "pp": init_pp.detach().cpu().numpy().reshape(-1, 2),
+                    "R": poses.numpy()[..., :3, :3],
+                    "t": poses.numpy()[..., :3, 3],
+                }
+                
+                return None, None, None, None, None, cam_dict, poses
+                
+                return None, None, None, None, None, cam_dict, poses
+
+        elif solve_pose:
             pts3ds_self = [
                 output["pts3d_in_self_view"].cpu() for output in outputs["pred"]
             ]

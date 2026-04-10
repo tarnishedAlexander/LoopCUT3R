@@ -181,6 +181,13 @@ Please refer to the [eval.md](docs/eval.md) for more details.
 ## Training and Fine-tuning
 Please refer to the [train.md](docs/train.md) for more details.
 
+LoopCUT3R also supports two selectable head/loss variants on the same recurrent backbone:
+
+- `original_cut3r` (original CUT3R-style heads/losses)
+- `loop_new` (LoopCUT3R DualDPT + new loss stack)
+
+See [train.md](docs/train.md) for exact commands using `--variant`.
+
 ## Acknowledgements
 Our code is based on the following awesome repositories:
 

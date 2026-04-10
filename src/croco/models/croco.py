@@ -9,16 +9,229 @@
 
 import torch
 import torch.nn as nn
+import glob
+import os
+import sys
+import importlib
 
 torch.backends.cuda.matmul.allow_tf32 = True  # for gpu >= Ampere and pytorch >= 1.12
 from functools import partial
 
-from models.blocks import Block, DecoderBlock, PatchEmbed
+from models.blocks import Block, DecoderBlock, PatchEmbed, RecurrentBlock
 from models.pos_embed import get_2d_sincos_pos_embed, RoPE2D
 from models.masking import RandomMask
 
 from transformers import PretrainedConfig
 from transformers import PreTrainedModel
+
+
+def strip_module(state_dict):
+    """Remove the 'module.' prefix from state_dict keys (DDP artifact)."""
+    return {
+        (k[7:] if isinstance(k, str) and k.startswith("module.") else k): v
+        for k, v in state_dict.items()
+    }
+
+
+def _resolve_checkpoint_path(path: str) -> str:
+    if os.path.isfile(path):
+        return path
+
+    candidates = []
+    if any(ch in path for ch in "*?[]"):
+        # explicit glob pattern — use it directly
+        candidates.extend(glob.glob(path))
+    else:
+        # exact or ambiguous path — try direct glob then fuzzy prefix match
+        candidates.extend(glob.glob(path))
+        dirname = os.path.dirname(path) or "."
+        basename = os.path.basename(path)
+        candidates.extend(glob.glob(os.path.join(dirname, f"*{basename}")))
+
+    candidates = [p for p in candidates if os.path.isfile(p)]
+    if not candidates:
+        raise FileNotFoundError(f"Cannot resolve recurrent checkpoint path: {path}")
+    candidates = sorted(set(candidates))
+    if len(candidates) > 1:
+        preview = "\n  - " + "\n  - ".join(candidates[:10])
+        extra = "" if len(candidates) <= 10 else f"\n  ... (+{len(candidates) - 10} more)"
+        raise ValueError(
+            "Ambiguous recurrent checkpoint path. Please provide an exact file path "
+            f"or a pattern matching one file only: {path}\nCandidates:{preview}{extra}"
+        )
+    return candidates[0]
+
+
+def _extract_recurrent_state_dict(loaded_obj, block_index=0):
+    if isinstance(loaded_obj, nn.Module):
+        if hasattr(loaded_obj, "blocks") and isinstance(
+            loaded_obj.blocks, (nn.ModuleList, list, tuple)
+        ):
+            if len(loaded_obj.blocks) == 0:
+                raise ValueError("Loaded recurrent module has empty `blocks`.")
+            idx = max(0, min(int(block_index), len(loaded_obj.blocks) - 1))
+            return loaded_obj.blocks[idx].state_dict(), f"module.blocks[{idx}]"
+        return loaded_obj.state_dict(), loaded_obj.__class__.__name__
+
+    if isinstance(loaded_obj, dict):
+        if "state_dict" in loaded_obj and isinstance(loaded_obj["state_dict"], dict):
+            return strip_module(loaded_obj["state_dict"]), "dict.state_dict"
+
+        if "model" in loaded_obj:
+            model_obj = loaded_obj["model"]
+            if isinstance(model_obj, nn.Module):
+                return _extract_recurrent_state_dict(model_obj, block_index=block_index)
+            if isinstance(model_obj, dict):
+                return strip_module(model_obj), "dict.model"
+
+        looks_like_state_dict = all(
+            isinstance(k, str)
+            for k in loaded_obj.keys()
+        ) and any(
+            key.startswith("norm1") or key.startswith("attn") or key.startswith("mlp")
+            for key in loaded_obj.keys()
+        )
+        if looks_like_state_dict:
+            return _strip_module_prefix(loaded_obj), "raw_state_dict"
+
+    raise TypeError(
+        f"Unsupported recurrent checkpoint object type: {type(loaded_obj).__name__}"
+    )
+
+
+def _extract_recurrent_state_dict_list(loaded_obj):
+    """Best-effort extraction of per-block recurrent state dicts.
+
+    Returns:
+        (list_of_state_dicts, source) if recurrent module exposes `blocks`
+        (None, None) otherwise.
+    """
+    if isinstance(loaded_obj, nn.Module):
+        if hasattr(loaded_obj, "blocks") and isinstance(
+            loaded_obj.blocks, (nn.ModuleList, list, tuple)
+        ):
+            if len(loaded_obj.blocks) == 0:
+                raise ValueError("Loaded recurrent module has empty `blocks`.")
+            return [blk.state_dict() for blk in loaded_obj.blocks], "module.blocks[*]"
+        return None, None
+
+    if isinstance(loaded_obj, dict) and "model" in loaded_obj:
+        model_obj = loaded_obj["model"]
+        if isinstance(model_obj, nn.Module):
+            return _extract_recurrent_state_dict_list(model_obj)
+
+    return None, None
+
+
+def _candidate_source_dirs_from_checkpoint(resolved_path: str):
+    """Return candidate source roots to resolve pickled checkpoint modules."""
+    candidates = []
+    cur = os.path.abspath(os.path.dirname(resolved_path))
+    for _ in range(7):
+        if cur in ("", os.path.sep):
+            break
+        candidates.append(cur)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+
+    source_dirs = []
+    for d in candidates:
+        # direct source root (e.g., .../raptor1/src)
+        if os.path.isfile(os.path.join(d, "raptor.py")) or os.path.isfile(
+            os.path.join(d, "block.py")
+        ):
+            source_dirs.append(d)
+        # repo root containing src/
+        src_d = os.path.join(d, "src")
+        if os.path.isdir(src_d) and (
+            os.path.isfile(os.path.join(src_d, "raptor.py"))
+            or os.path.isfile(os.path.join(src_d, "block.py"))
+        ):
+            source_dirs.append(src_d)
+
+    # de-duplicate preserving order
+    seen = set()
+    unique = []
+    for d in source_dirs:
+        if d not in seen:
+            unique.append(d)
+            seen.add(d)
+    return unique
+
+
+def load_recurrent_blocks_from_checkpoint(
+    blocks: nn.ModuleList,
+    recurrent_ckpt: str,
+    block_index: int = 0,
+    strict: bool = False,
+):
+    if recurrent_ckpt is None:
+        return None
+
+    resolved_path = _resolve_checkpoint_path(recurrent_ckpt)
+    try:
+        loaded_obj = torch.load(resolved_path, map_location="cpu", weights_only=False)
+    except ModuleNotFoundError as e:
+        # RAPTOR checkpoints are often pickled with classes from `raptor.py`
+        # and/or `block.py`. Recover by locating nearby source dirs and
+        # importing the missing module before retrying torch.load.
+        missing_mod = getattr(e, "name", "")
+        if missing_mod not in {"block", "raptor"}:
+            raise
+
+        imported = False
+        import_errors = []
+        for src_dir in _candidate_source_dirs_from_checkpoint(resolved_path):
+            try:
+                if src_dir not in sys.path:
+                    sys.path.insert(0, src_dir)
+                mod = importlib.import_module(missing_mod)
+                sys.modules[missing_mod] = mod
+                imported = True
+                break
+            except Exception as ie:
+                import_errors.append(f"{src_dir}: {ie}")
+
+        if not imported:
+            detail = "\n  - " + "\n  - ".join(import_errors[:6]) if import_errors else ""
+            raise ModuleNotFoundError(
+                f"Could not import missing module '{missing_mod}' while loading recurrent checkpoint {resolved_path}.{detail}"
+            ) from e
+
+        loaded_obj = torch.load(resolved_path, map_location="cpu", weights_only=False)
+
+    multi_state_dicts, multi_source = _extract_recurrent_state_dict_list(loaded_obj)
+
+    load_results = []
+    source_indices = []
+    if multi_state_dicts is not None and len(blocks) > 1:
+        n_src = len(multi_state_dicts)
+        n_tgt = len(blocks)
+        for i, blk in enumerate(blocks):
+            src_idx = i if i < n_src else (i % n_src)
+            source_indices.append(src_idx)
+            load_results.append(
+                blk.load_state_dict(multi_state_dicts[src_idx], strict=strict)
+            )
+        source = f"{multi_source} mapped {n_src}-> {n_tgt}"
+    else:
+        state_dict, source = _extract_recurrent_state_dict(
+            loaded_obj, block_index=block_index
+        )
+        for blk in blocks:
+            load_results.append(blk.load_state_dict(state_dict, strict=strict))
+            source_indices.append(int(block_index))
+
+    return {
+        "resolved_path": resolved_path,
+        "source": source,
+        "num_blocks": len(blocks),
+        "strict": strict,
+        "source_indices": source_indices,
+        "load_results": load_results,
+    }
 
 
 class CrocoConfig(PretrainedConfig):
@@ -39,6 +252,16 @@ class CrocoConfig(PretrainedConfig):
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
         norm_im2_in_dec=True,  # whether to apply normalization of the 'memory' = (second image) in the decoder
         pos_embed="cosine",  # positional embedding (either cosine or RoPE100)
+        num_blocks=1,
+        num_steps=None,
+        use_tbptl=True,
+        tbptl_warmup=2,
+        recurrent_ckpt=None,
+        recurrent_block_index=0,
+        recurrent_strict=False,
+        recurrent_t_scale=False,
+        recurrent_swiglu=False,
+        ls_init=1e-5,
     ):
         super().__init__()
         self.img_size = img_size
@@ -54,6 +277,16 @@ class CrocoConfig(PretrainedConfig):
         self.norm_layer = norm_layer
         self.norm_im2_in_dec = norm_im2_in_dec
         self.pos_embed = pos_embed
+        self.num_blocks = num_blocks
+        self.num_steps = num_steps
+        self.use_tbptl = use_tbptl
+        self.tbptl_warmup = tbptl_warmup
+        self.recurrent_ckpt = recurrent_ckpt
+        self.recurrent_block_index = recurrent_block_index
+        self.recurrent_strict = recurrent_strict
+        self.recurrent_t_scale = recurrent_t_scale
+        self.recurrent_swiglu = recurrent_swiglu
+        self.ls_init = ls_init
 
 
 class CroCoNet(PreTrainedModel):
@@ -108,24 +341,61 @@ class CroCoNet(PreTrainedModel):
         # transformer for the encoder
         self.enc_depth = config.enc_depth
         self.enc_embed_dim = config.enc_embed_dim
+        
+        # Recurrent Parameters
+        self.num_blocks = int(config.num_blocks)
+        self.num_steps = (
+            int(config.num_steps)
+            if config.num_steps is not None
+            else self.enc_depth // self.num_blocks
+        )
+        if self.enc_depth != self.num_steps * self.num_blocks:
+            print(
+                "[RecurrentEncoder] Warning: enc_depth "
+                f"({self.enc_depth}) != num_steps*num_blocks "
+                f"({self.num_steps}*{self.num_blocks}={self.num_steps * self.num_blocks})."
+            )
+        self.use_tbptl = bool(config.use_tbptl)
+        self.tbptl_warmup = int(config.tbptl_warmup)
+        recurrent_ckpt = config.recurrent_ckpt
+        recurrent_block_index = int(config.recurrent_block_index)
+        recurrent_strict = bool(config.recurrent_strict)
+        
         self.enc_blocks = nn.ModuleList(
             [
-                Block(
-                    config.enc_embed_dim,
-                    config.enc_num_heads,
-                    config.mlp_ratio,
-                    qkv_bias=True,
-                    norm_layer=config.norm_layer,
-                    rope=self.rope,
+                RecurrentBlock(
+                    dim=config.enc_embed_dim,
+                    num_heads=config.enc_num_heads,
+                    mlp_ratio=config.mlp_ratio,
+                    init_values=config.ls_init,
+                    t_scale=config.recurrent_t_scale,
+                    swiglu=config.recurrent_swiglu,
                 )
-                for i in range(config.enc_depth)
+                for i in range(self.num_blocks)
             ]
         )
+        
+        if recurrent_ckpt is not None:
+            print(f"Loading recurrent weights from {recurrent_ckpt}")
+            info = load_recurrent_blocks_from_checkpoint(
+                self.enc_blocks,
+                recurrent_ckpt,
+                block_index=recurrent_block_index,
+                strict=recurrent_strict,
+            )
+            print(
+                "Loaded recurrent backbone from "
+                f"{info['resolved_path']} ({info['source']}) into {info['num_blocks']} block(s)"
+            )
+            print(
+                "Recurrent source block mapping -> target blocks: "
+                f"{info['source_indices']}"
+            )
+
         self.enc_norm = config.norm_layer(config.enc_embed_dim)
 
         # masked tokens
-        # self._set_mask_token(config.dec_embed_dim)
-        self.mask_token = None
+        self._set_mask_token(config.dec_embed_dim)
 
         # decoder
         self._set_decoder(
@@ -233,14 +503,44 @@ class CroCoNet(PreTrainedModel):
         # now apply the transformer encoder and normalization
         if return_all_blocks:
             out = []
-            for blk in self.enc_blocks:
-                x = blk(x, posvis)
-                out.append(x)
+            if self.use_tbptl and self.training:
+                with torch.no_grad():
+                    for step in range(self.tbptl_warmup):
+                        for blk in self.enc_blocks:
+                            x = blk(x, posvis)
+                        out.append(x)
+                if self.tbptl_warmup > 0:
+                    x = x.detach()
+                    x.requires_grad = True
+                    if self.tbptl_warmup == self.num_steps:
+                        out[-1] = x
+                for step in range(self.tbptl_warmup, self.num_steps):
+                    for blk in self.enc_blocks:
+                        x = blk(x, posvis)
+                    out.append(x)
+            else:
+                for step in range(self.num_steps):
+                    for blk in self.enc_blocks:
+                        x = blk(x, posvis)
+                    out.append(x)
             out[-1] = self.enc_norm(out[-1])
             return out, pos, masks
         else:
-            for blk in self.enc_blocks:
-                x = blk(x, posvis)
+            if self.use_tbptl and self.training:
+                with torch.no_grad():
+                    for step in range(self.tbptl_warmup):
+                        for blk in self.enc_blocks:
+                            x = blk(x, posvis)
+                if self.tbptl_warmup > 0:
+                    x = x.detach()
+                    x.requires_grad = True
+                for step in range(self.tbptl_warmup, self.num_steps):
+                    for blk in self.enc_blocks:
+                        x = blk(x, posvis)
+            else:
+                for step in range(self.num_steps):
+                    for blk in self.enc_blocks:
+                        x = blk(x, posvis)
             x = self.enc_norm(x)
             return x, pos, masks
 

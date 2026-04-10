@@ -109,6 +109,8 @@ def load_traj(gt_traj_file, traj_format="sintel", skip=0, stride=1, num_frames=N
         traj_tum, timestamps_mat = load_replica_traj(gt_traj_file)
     elif traj_format == "sintel":
         traj_tum, timestamps_mat = load_sintel_traj(gt_traj_file)
+    elif traj_format == "vkitti2":
+        traj_tum, timestamps_mat = load_vkitti2_traj(gt_traj_file)
     elif traj_format in ["tum", "tartanair"]:
         traj = file_interface.read_tum_trajectory_file(gt_traj_file)
         xyz = traj.positions_xyz
@@ -124,6 +126,49 @@ def load_traj(gt_traj_file, traj_format="sintel", skip=0, stride=1, num_frames=N
         traj_tum = traj_tum[:num_frames]
         timestamps_mat = timestamps_mat[:num_frames]
     return traj_tum, timestamps_mat
+
+
+def load_vkitti2_traj(gt_file):
+    # Extrinsic matrix format in VKITTI2:
+    # frame cameraID r1,1 r1,2 r1,3 t1 r2,1 r2,2 r2,3 t2 r3,1 r3,2 r3,3 t3 0 0 0 1
+    with open(gt_file, "r") as f:
+        lines = f.readlines()
+        
+    lines = lines[1:]  # Skip header
+    
+    tum_gt_poses = []
+    tstamps = []
+    
+    for line in lines:
+        parts = line.strip().split()
+        if len(parts) < 18:
+            continue
+            
+        frame_idx = int(parts[0])
+        cam_id = int(parts[1])
+        
+        # Parse only Camera 0
+        if cam_id != 0:
+            continue
+            
+        vals = list(map(float, parts[2:]))
+        E = np.array(vals).reshape(4, 4)
+        
+        # Invert from world-to-cam to cam-to-world
+        pose = np.linalg.inv(E)
+        
+        xyz = pose[:3, -1]
+        R = Rotation.from_matrix(pose[:3, :3])
+        xyzw = R.as_quat()  # scalar-last
+        wxyz = np.array([xyzw[-1], xyzw[0], xyzw[1], xyzw[2]])
+        
+        tum_gt_pose = np.concatenate([xyz, wxyz], 0)
+        tum_gt_poses.append(tum_gt_pose)
+        tstamps.append(float(frame_idx))
+
+    tum_gt_poses = np.stack(tum_gt_poses, 0)
+    tt = np.array(tstamps)
+    return tum_gt_poses, tt
 
 
 def update_timestamps(gt_file, traj_format, skip=0, stride=1):
