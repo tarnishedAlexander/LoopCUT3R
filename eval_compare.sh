@@ -6,15 +6,26 @@
 #   bash eval_compare.sh                                    # defaults (see below)
 #   bash eval_compare.sh <our_ckpt> <cut3r_ckpt>           # explicit paths
 #   bash eval_compare.sh <our_ckpt> <cut3r_ckpt> 224 512   # explicit paths + sizes
+#   bash eval_compare.sh --score-only                      # re-score existing predictions
 #
 # Results land in eval_results/ and a summary is printed at the end.
 #
 # NOTE: video_depth eval requires size=512. If OURS_SIZE=224 (stage-1/2 linear model),
 # video_depth is skipped for our checkpoint and only run for CUT3R.
+#
+# --score-only skips all inference and re-scores whatever video_depth
+# predictions are already on disk under eval_results/video_depth/. Use it when
+# a full run reported "(no results)" for depth but the predictions did land.
 
 set -euo pipefail
 
 cd "$(dirname "$0")"
+
+SCORE_ONLY=false
+if [[ "${1:-}" == "--score-only" ]]; then
+    SCORE_ONLY=true
+    shift
+fi
 
 OURS="${1:-checkpoints/recurrent_stage3/checkpoints/checkpoint-last.pth}"
 CUT3R="${2:-../CUT3R/checkpoint/cut3r_512_dpt_4_64.pth}"
@@ -46,8 +57,11 @@ check_ckpt() {
 }
 
 # ── validation ───────────────────────────────────────────────────────────────
-check_ckpt "$OURS"
-check_ckpt "$CUT3R"
+# --score-only touches no checkpoints, so don't require them to exist.
+if [[ "$SCORE_ONLY" != true ]]; then
+    check_ckpt "$OURS"
+    check_ckpt "$CUT3R"
+fi
 mkdir -p eval_results
 
 echo "============================================================"
@@ -130,9 +144,40 @@ run_all_evals() {
     fi
 }
 
+# ── re-score predictions already on disk, no inference ───────────────────────
+# Folded in from the former eval_score_depth.sh. That script hardcoded four
+# stage2_ep7 paths; this discovers whatever is actually present instead.
+score_existing_depth() {
+    hdr "RE-SCORING EXISTING video_depth PREDICTIONS"
+    local root="eval_results/video_depth"
+    [[ -d "$root" ]] || die "$root not found — nothing to score"
+
+    local found=0
+    for out in "$root"/*/; do
+        [[ -d "$out" ]] || continue
+        out="${out%/}"
+        # dir names are <dataset>_<label>, so the dataset is the leading field
+        local dataset="${out##*/}"
+        dataset="${dataset%%_*}"
+        echo "→ ${dataset}  (${out})"
+        python eval/video_depth/eval_depth.py \
+            --output_dir "$out" \
+            --eval_dataset "$dataset" \
+            --align "scale&shift" 2>&1 | tail -3
+        found=$((found + 1))
+    done
+    [[ $found -gt 0 ]] || die "no prediction directories under $root"
+    echo ""
+    echo "Re-scored ${found} prediction directory/ies."
+}
+
 # ── run both models ──────────────────────────────────────────────────────────
-run_all_evals "$OURS"  "$OURS_LABEL"  "$OURS_SIZE" "false"
-run_all_evals "$CUT3R" "$CUT3R_LABEL" "$CUT3R_SIZE" "true"
+if [[ "$SCORE_ONLY" == true ]]; then
+    score_existing_depth
+else
+    run_all_evals "$OURS"  "$OURS_LABEL"  "$OURS_SIZE" "false"
+    run_all_evals "$CUT3R" "$CUT3R_LABEL" "$CUT3R_SIZE" "true"
+fi
 
 # ── summary table ────────────────────────────────────────────────────────────
 sep
