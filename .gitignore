@@ -59,3 +59,12 @@ eval_results
 src/checkpoints*
 *.pth
 checkpoints*
+# Hydra code snapshots written by save_current_code() in train.py
+code/
+# atomic-write temp files (e.g. config/foo.yaml.tmp.1234.abcdef)
+*.tmp.*
+# generated figures; keep upstream demo/doc images
+*.png
+!assets/*.png
+!examples/**/*.png
+!docs/**/*.png
