@@ -1,6 +1,6 @@
 """Quick diagnostic: instantiate every Stage 2 dataset and print its length.
 Run inside the container:
-  cd /app/recurrentTransformer/LoopCUT3R && python src/check_datasets.py
+  cd /app/recurrentTransformer/LoopCUT3R && python tools/h5/check_datasets.py
 """
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))

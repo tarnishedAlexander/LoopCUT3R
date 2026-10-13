@@ -1,5 +1,5 @@
 """Check H5 structure for ARKitScenesHighRes.
-Run inside container: python src/check_h5_structure.py
+Run inside container: python tools/h5/check_h5_structure.py
 """
 import h5py, sys
 

@@ -17,10 +17,10 @@ Priority ordering:
   fraction of training samples served from NVMe per unit of NVMe space used.
 
 Usage:
-  python stage_to_nvme.py                    # stage all that fit
-  python stage_to_nvme.py --dry-run          # show plan without copying
-  python stage_to_nvme.py --unstage          # revert all symlinks to HDD
-  python stage_to_nvme.py --status           # show current staging state
+  python tools/h5/stage_to_nvme.py                    # stage all that fit
+  python tools/h5/stage_to_nvme.py --dry-run          # show plan without copying
+  python tools/h5/stage_to_nvme.py --unstage          # revert all symlinks to HDD
+  python tools/h5/stage_to_nvme.py --status           # show current staging state
 """
 
 import os
