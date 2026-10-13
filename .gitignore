@@ -68,3 +68,6 @@ code/
 !assets/*.png
 !examples/**/*.png
 !docs/**/*.png
+
+# sample demo inputs (118 MB of frames)
+demo_data/
