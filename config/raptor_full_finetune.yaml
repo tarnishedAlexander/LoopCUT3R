@@ -1,14 +1,15 @@
 # Full CUT3R training with a native recurrent backbone initialized from RAPTOR pretraining.
 # Trains both ENCODER and DECODER on a mix of datasets.
 
-model: "ARCroco3DStereo(ARCroco3DStereoConfig(freeze='none', state_size=576, state_pe='2d', pos_embed='RoPE100', rgb_head=True, pose_head=True, img_size=(96, 96), head_type='linear', output_mode='pts3d+pose', depth_mode=('exp', -inf, inf), conf_mode=('exp', 1, inf), pose_mode=('exp', -inf, inf), enc_embed_dim=768, enc_depth=12, enc_num_heads=12, dec_embed_dim=512, dec_depth=8, dec_num_heads=16, num_blocks=1, num_steps=8, use_tbptl=True, tbptl_warmup=2, tbptl_thinking=1, tbptl_grad_steps=4, recurrent_t_scale=False, recurrent_swiglu=False, ls_init=1e-5))"
+model: "ARCroco3DStereo(ARCroco3DStereoConfig(freeze='none', state_size=768, state_pe='2d', pos_embed='RoPE100', rgb_head=True, pose_head=True, img_size=(96, 96), head_type='linear', output_mode='pts3d+pose', depth_mode=('exp', -inf, inf), conf_mode=('exp', 1, inf), pose_mode=('exp', -inf, inf), enc_embed_dim=1024, enc_depth=24, enc_num_heads=16, dec_embed_dim=512, dec_depth=8, dec_num_heads=16, num_blocks=3, num_steps=8, use_tbptl=True, tbptl_warmup=2, tbptl_thinking=1, tbptl_grad_steps=4, recurrent_t_scale=False, recurrent_swiglu=False, ls_init=1e-5))"
 
 pretrained: null
 load_only_encoder: False
 resume: null
 
-# Native recurrent backbone initialization (Raptor result)
-recurrent_ckpt: ${oc.env:RAPTOR_RECURRENT_CKPT,/app/recurrentTransformer/raptor/src/runs/models/raptor_latest.pt}
+# Phase 3 Raptor composed model used as encoder initialization.
+# Set RAPTOR_RECURRENT_CKPT env var to override, or update the default path below.
+recurrent_ckpt: ${oc.env:RAPTOR_RECURRENT_CKPT,/app/recurrentTransformer/raptor1/src/phase3_models/raptor_latest.pt}
 recurrent_block_index: 0
 recurrent_strict: True
 
@@ -65,7 +66,7 @@ print_freq: 5
 print_img_freq: 1000
 num_imgs_vis: 2
 save_dir: 'checkpoints'
-exp_name: 'raptor_full_finetune_48h'
+exp_name: 'raptor_full_finetune_1024_48h'
 task: 'cut3r'
 logdir: ./${save_dir}/${exp_name}/logs
 output_dir: ./${save_dir}/${exp_name}/

@@ -19,7 +19,7 @@ dataset2: WildRGBD_Multi(split='train', ROOT="${data_root}/dust3r_data/processed
 
 dataset3: ARKitScenes_Multi(split='train', ROOT='${data_root}/dust3r_data/processed_arkitscenes/', aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
 dataset4: ARKitScenesHighRes_Multi(split='train', ROOT="${data_root}/dust3r_data/processed_arkitscenes_highres", aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
-dataset5: ScanNetpp_Multi(split='train', ROOT="${data_root}/dust3r_data/processed_scannetpp/", aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset5: ScanNetpp_Multi(split='train', ROOT="${data_root}/disk12tb/scannet/processed_scannetpp/", aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
 dataset6: ScanNet_Multi(split='train', ROOT="${data_root}/dust3r_data/processed_scannet/", aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
 dataset7: HyperSim_Multi(split='train', ROOT="${data_root}/custom_data/processed_hypersim", aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
 
@@ -41,15 +41,15 @@ seed: 0
 batch_size: 16
 accum_iter: 1
 gradient_checkpointing: False
-epochs: 100
+epochs: 4
 start_epoch: 0
 weight_decay: 0.05
 lr: 1e-4
 min_lr: 1e-6
-warmup_epochs: 10
+warmup_epochs: 1
 amp: 1
 
-num_workers: 8
+num_workers: 2
 world_size: 1
 local-rank: -1
 dist_url: 'env://'

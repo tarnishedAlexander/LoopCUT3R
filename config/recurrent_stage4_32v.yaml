@@ -1,0 +1,191 @@
+# Recurrent Stage 4 — 32-view long-context fine-tuning
+#
+# Identical to CUT3R's stage4.yaml except:
+#   - Model arch adds LoopCUT3R recurrent params (num_blocks, num_steps, TBPTL, etc.)
+#   - Dataset paths point to our local mounts
+#   - batch_size=4 / accum_iter=4 (same effective batch=16 as CUT3R's 16/1, GPU-feasible)
+#   - BlendedMVS2 added alongside BlendedMVS1 (not in original CUT3R)
+#   - DL3DV excluded (H5VFS nested-dir structure yields 0 valid scenes at num_views=32)
+#   - Datasets 20-25, 33 defined but not sampled (matches CUT3R stage4 behaviour exactly)
+#   - mixed_precision=bf16 instead of amp=1 (equivalent, but our pipeline uses bf16)
+
+model: "ARCroco3DStereo(ARCroco3DStereoConfig(freeze='encoder', state_size=768, state_pe='2d', pos_embed='RoPE100', rgb_head=True, pose_head=True, patch_embed_cls='ManyAR_PatchEmbed', img_size=(512, 512), head_type='dpt', output_mode='pts3d+pose', depth_mode=('exp', -inf, inf), conf_mode=('exp', 1, inf), pose_mode=('exp', -inf, inf), enc_embed_dim=1024, enc_depth=24, enc_num_heads=16, dec_embed_dim=768, dec_depth=12, dec_num_heads=12, landscape_only=False, num_blocks=3, num_steps=8, use_tbptl=False, tbptl_warmup=6, tbptl_thinking=1, tbptl_grad_steps=2, recurrent_t_scale=False, recurrent_swiglu=False, ls_init=1e-5, dec_num_blocks_img=3, dec_num_steps_img=4, dec_num_blocks_state=3, dec_num_steps_state=4, dec_use_tbptl=False))"
+
+pretrained: checkpoints/recurrent_stage3b/checkpoints/checkpoint-final.pth
+load_only_encoder: False
+resume: null
+auto_resume: True
+
+recurrent_ckpt: null
+recurrent_block_index: 0
+recurrent_strict: False
+encoder_only_training: False
+
+train_criterion: "ConfLoss(Regr3DPoseBatchList(L21, norm_mode='?avg_dis'), alpha=0.2) + RGBLoss(MSE)"
+test_criterion: "Regr3DPose(L21, norm_mode='?avg_dis', gt_scale=True, sky_loss_value=0) + Regr3DPose_ScaleInv(L21, norm_mode='?avg_dis', gt_scale=True, sky_loss_value=0) + RGBLoss(L21)"
+
+long_context: True
+fixed_length: True
+benchmark: True
+
+num_views: 32
+num_test_views: 4
+n_corres_train: 0
+n_corres_test: 0
+
+# Dataset paths
+co3d_root:            /app/recurrentTransformer/dataset/datasetfaster/processed_co3d
+wildrgbd_root:        /app/recurrentTransformer/dataset/disk14tb/preprocess_wildrgbd
+arkit_root:           /app/recurrentTransformer/fastdatasets/processed_arkitscenes
+arkit_highres_root:   /app/recurrentTransformer/fastdatasets/processed_arkitscenes_highres
+scannetpp_root:       /app/recurrentTransformer/dataset/datasetfaster/processed_scannetpp
+scannet_root:         /app/recurrentTransformer/dataset/diskPool/processed_scannet
+hypersim_root:        /app/recurrentTransformer/dataset/diskPool/processed_hypersim
+blended_mvs1_root:    /app/recurrentTransformer/dataset/datasetfaster/processed_BlendedMVS1_full
+blended_mvs2_root:    /app/recurrentTransformer/dataset/datasetfaster/processed_BlendedMVS2_full
+megadepth_root:       /app/recurrentTransformer/dataset/datasetfaster/processed_megadepth
+mapfree_root:         /app/recurrentTransformer/dataset/datasetfaster/processed_mapfree
+waymo_root:           /app/recurrentTransformer/fastdatasets/waymo_processed
+vkitti_root:          /app/recurrentTransformer/dataset/datasetfaster/vkitti_2.0.3_mixed
+unreal4k_root:        /app/recurrentTransformer/dataset/disk12tb/processed/processed_unrealStereo4k
+tartanair_root:       /app/recurrentTransformer/dataset/diskPool/processed_TartanAir
+cop3d_root:           /app/recurrentTransformer/dataset/disk12tb/processed/processed_cop3d
+mvimgnet_root:        /app/recurrentTransformer/dataset/disk12tb/processed/processed_mvimgnet
+re10k_root:           /app/recurrentTransformer/dataset/disk12tb/processed/processed_re10k
+omniobject3d_root:    /app/recurrentTransformer/dataset/disk14tb/processed_omniobject3d
+threedkb_root:        /app/recurrentTransformer/dataset/disk14tb/processed_3dkb
+irs_root:             /app/recurrentTransformer/dataset/disk12tb/processed_irs
+synscapes_root:       /app/recurrentTransformer/dataset/disk14tb/processed_synscapes
+urbansyn_root:        /app/recurrentTransformer/dataset/disk12tb/processed_urbansyn
+eden_root:            /app/recurrentTransformer/dataset/disk12tb/processed_eden
+dynamic_replica_root: /app/recurrentTransformer/dataset/disk14tb/processed_dynamic_replica
+spring_root:          /app/recurrentTransformer/dataset/disk12tb/processed_spring
+bedlam_root:          /app/recurrentTransformer/dataset/disk12tb/processed_bedlam
+mvs_synth_root:       /app/recurrentTransformer/fastdatasets/processed_mvs_synth
+point_odyssey_root:   /app/recurrentTransformer/dataset/diskPool/processed_point_odyssey
+uasol_root:           /app/recurrentTransformer/dataset/datasetfaster/processed_uasol
+mp3d_root:            /app/recurrentTransformer/dataset/disk14tb/matterport3d/processed_mp3d
+hoi4d_root:           /app/recurrentTransformer/dataset/disk14tb/processed_hoi4d
+
+resolution:
+  - [512, 384]
+  - [512, 336]
+  - [512, 288]
+  - [512, 256]
+  - [512, 208]
+  - [512, 144]
+  - [384, 512]
+  - [336, 512]
+  - [288, 512]
+  - [256, 512]
+
+dataset1:  Co3d_Multi(allow_repeat=False, split='train', ROOT='${co3d_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset2:  WildRGBD_Multi(allow_repeat=False, split='train', ROOT='${wildrgbd_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset3:  ARKitScenes_Multi(allow_repeat=False, split='train', ROOT='${arkit_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset4:  ARKitScenesHighRes_Multi(allow_repeat=False, split='train', ROOT='${arkit_highres_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset5:  ScanNetpp_Multi(allow_repeat=False, split='train', ROOT='${scannetpp_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset6:  ScanNet_Multi(allow_repeat=False, split='train', ROOT='${scannet_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset7:  HyperSim_Multi(allow_repeat=False, split='train', ROOT='${hypersim_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset8:  BlendedMVS_Multi(allow_repeat=False, split='train', ROOT='${blended_mvs1_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset8b: BlendedMVS_Multi(allow_repeat=False, split='train', ROOT='${blended_mvs2_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset9:  MegaDepth_Multi(allow_repeat=False, split='train', ROOT='${megadepth_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset10: MapFree_Multi(allow_repeat=False, split=None, ROOT='${mapfree_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset11: Waymo_Multi(allow_repeat=False, split=None, ROOT='${waymo_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset12: VirtualKITTI2_Multi(allow_repeat=False, split=None, ROOT='${vkitti_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset13: UnReal4K_Multi(allow_repeat=False, split=None, ROOT='${unreal4k_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset14: TartanAir_Multi(allow_repeat=False, split=None, ROOT='${tartanair_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+# dataset15: DL3DV excluded — H5VFS nested-dir structure yields 0 valid scenes at num_views=32
+dataset16: Cop3D_Multi(allow_repeat=False, split='train', ROOT='${cop3d_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset17: MVImgNet_Multi(allow_repeat=False, split='train', ROOT='${mvimgnet_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset18: RE10K_Multi(allow_repeat=False, split=None, ROOT='${re10k_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset19: OmniObject3D_Multi(allow_repeat=False, split=None, ROOT='${omniobject3d_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+# Defined but not sampled — matches CUT3R stage4 behaviour
+dataset20: ThreeDKenBurns(allow_repeat=False, split=None, ROOT='${threedkb_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset21: IRS(allow_repeat=False, split=None, ROOT='${irs_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset22: SynScapes(allow_repeat=False, split=None, ROOT='${synscapes_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset23: UrbanSyn(allow_repeat=False, split=None, ROOT='${urbansyn_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset24: EDEN_Multi(allow_repeat=False, split='train', ROOT='${eden_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+# dataset25: SmartPortraits not available on disk
+dataset26: DynamicReplica(allow_repeat=False, split='train', ROOT='${dynamic_replica_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset27: Spring(allow_repeat=False, split=None, ROOT='${spring_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset28: BEDLAM_Multi(allow_repeat=False, split='train', ROOT='${bedlam_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset29: MVS_Synth_Multi(allow_repeat=False, split='train', ROOT='${mvs_synth_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset30: PointOdyssey_Multi(allow_repeat=False, split='train', ROOT='${point_odyssey_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset31: UASOL_Multi(allow_repeat=False, split='train', ROOT='${uasol_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset32: MP3D_Multi(allow_repeat=False, split=None, ROOT='${mp3d_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset33: HOI4D_Multi(allow_repeat=False, split=None, ROOT='${hoi4d_root}', aug_crop=16, resolution=${resolution}, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+
+# Sample counts identical to CUT3R stage4.yaml.
+# BlendedMVS2 (dataset8b) adds 11200 on top of BlendedMVS1's 11200.
+# DL3DV (42000 in CUT3R) excluded — loss partially offset by BlendedMVS2.
+# Datasets 20-24, 33 defined above but intentionally not sampled (same as CUT3R).
+train_dataset: >
+  22400 @ ${dataset1}
+  + 28000 @ ${dataset3}
+  + 2800  @ ${dataset4}
+  + 2800  @ ${dataset5}
+  + 70000 @ ${dataset6}
+  + 2800  @ ${dataset7}
+  + 11200 @ ${dataset8}
+  + 11200 @ ${dataset8b}
+  + 8400  @ ${dataset9}
+  + 28000 @ ${dataset10}
+  + 21000 @ ${dataset11}
+  + 2800  @ ${dataset12}
+  + 84    @ ${dataset13}
+  + 42000 @ ${dataset14}
+  + 3600  @ ${dataset16}
+  + 9600  @ ${dataset17}
+  + 4800  @ ${dataset18}
+  + 12000 @ ${dataset19}
+  + 16800 @ ${dataset26}
+  + 1200  @ ${dataset27}
+  + 4800  @ ${dataset28}
+  + 2400  @ ${dataset29}
+  + 14400 @ ${dataset30}
+  + 7200  @ ${dataset31}
+  + 9600  @ ${dataset32}
+
+test_dataset: 1000 @ ARKitScenes_Multi(split='train', ROOT='${arkit_root}', resolution=224, num_views=${num_test_views}, seed=42, n_corres=${n_corres_test})
+
+seed: 0
+batch_size: 4
+accum_iter: 4
+gradient_checkpointing: True
+epochs: 5
+start_epoch: 0
+weight_decay: 0.05
+lr: 1.0e-6
+min_lr: 1.0e-7
+warmup_epochs: 0.5
+
+amp: 0
+mixed_precision: 'bf16'
+clip_grad: 0.3
+
+num_workers: 0
+world_size: 1
+local-rank: -1
+dist_url: 'env://'
+rank: 0
+gpu: 0
+distributed: False
+dist_backend: 'nccl'
+
+eval_freq: 1
+save_freq: 0.05
+keep_freq: 1
+print_freq: 10
+print_img_freq: 500
+num_imgs_vis: 4
+
+save_dir: 'checkpoints'
+exp_name: 'recurrent_stage4_32v'
+task: 'cut3r'
+logdir: ./${save_dir}/${exp_name}/logs
+output_dir: ./${save_dir}/${exp_name}/
+
+hydra:
+  verbose: False
+  run:
+    dir: ./${save_dir}/${exp_name}

@@ -1,0 +1,112 @@
+# Production-ready LoopCUT3R Recurrent Transformer config optimized for RTX 5090 (32GB VRAM)
+# Initializes encoder from the distilled Raptor-1 checkpoint (raptor_latest.pt)
+# Translates CUT3R's 24-layer encoder into 3 recurrent blocks * 8 unroll steps
+# Translates CUT3R's 12-layer decoder into 3 recurrent blocks * 4 unroll steps
+# Utilizes ONLY fully preprocessed and verified local datasets.
+
+model: "ARCroco3DStereo(ARCroco3DStereoConfig(freeze='none', state_size=768, state_pe='2d', pos_embed='RoPE100', rgb_head=True, pose_head=True, img_size=(224, 224), head_type='linear', output_mode='pts3d+pose', depth_mode=('exp', -inf, inf), conf_mode=('exp', 1, inf), pose_mode=('exp', -inf, inf), enc_embed_dim=1024, enc_depth=24, enc_num_heads=16, dec_embed_dim=768, dec_depth=12, dec_num_heads=12, num_blocks=3, num_steps=8, use_tbptl=True, tbptl_warmup=2, tbptl_thinking=1, tbptl_grad_steps=4, recurrent_t_scale=False, recurrent_swiglu=False, ls_init=1e-5, dec_num_blocks_img=3, dec_num_steps_img=4, dec_num_blocks_state=3, dec_num_steps_state=4, dec_use_tbptl=True, dec_tbptl_warmup=1, dec_tbptl_thinking=1, dec_tbptl_grad_steps=2))"
+
+pretrained: '/app/recurrentTransformer/raptor1/src/phase3_models/raptor_latest.pt'
+load_only_encoder: True
+resume: null
+auto_resume: True
+
+# Disable external recurrent loader since we are loading standard PyTorch state_dict weights
+recurrent_ckpt: null
+recurrent_block_index: 0
+recurrent_strict: False
+
+# Full-model training (encoder + decoder un-frozen for joint optimization)
+encoder_only_training: False
+
+# Loss Configuration (Original-style CUT3R L2.1 Point + Pose Regression with BatchList robustness)
+train_criterion: "ConfLoss(Regr3DPoseBatchList(L21, norm_mode='?avg_dis'), alpha=0.2) + RGBLoss(MSE)"
+test_criterion: "Regr3DPose(L21, norm_mode='?avg_dis', gt_scale=True, sky_loss_value=0) + Regr3DPose_ScaleInv(L21, norm_mode='?avg_dis', gt_scale=True, sky_loss_value=0) + RGBLoss(L21)"
+
+long_context: False
+fixed_length: True
+benchmark: True
+
+num_views: 4
+num_test_views: 4
+n_corres_train: 0
+n_corres_test: 0
+
+# Absolute paths within the container to verified preprocessed datasets
+co3d_root: /app/recurrentTransformer/dataset/diskPool/processed_co3d
+arkit_root: /app/recurrentTransformer/fastdatasets/processed_arkitscenes
+scannetpp_root: /app/recurrentTransformer/dataset/disk12tb/processed_scannetpp
+scannet_root: /app/recurrentTransformer/dataset/diskPool/processed_scannet
+blended_mvs1_root: /app/recurrentTransformer/dataset/diskPool/processed_BlendedMVS1_full
+blended_mvs2_root: /app/recurrentTransformer/dataset/diskPool/processed_BlendedMVS2_full
+megadepth_root: /app/recurrentTransformer/dataset/diskPool/processed_megadepth
+mapfree_root: /app/recurrentTransformer/dataset/disk12tb/Mapfreedataset/processed_mapfree
+waymo_root: /app/recurrentTransformer/fastdatasets/waymo_processed
+vkitti_root: /app/recurrentTransformer/dataset/disk12tb/vkitti_2.0.3_mixed
+tartanair_root: /app/recurrentTransformer/dataset/diskPool/processed_TartanAir
+mvs_synth_root: /app/recurrentTransformer/processed_mvs_synth
+
+# Individual Dataset Definitions
+dataset1: Co3d_Multi(split='train', ROOT='${co3d_root}', aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset2: ARKitScenes_Multi(split='train', ROOT='${arkit_root}', aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset3: ScanNetpp_Multi(split='train', ROOT='${scannetpp_root}', aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset4: ScanNet_Multi(split='train', ROOT='${scannet_root}', aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset5: BlendedMVS_Multi(split='train', ROOT='${blended_mvs1_root}', aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset6: BlendedMVS_Multi(split='train', ROOT='${blended_mvs2_root}', aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset7: MegaDepth_Multi(split='train', ROOT='${megadepth_root}', aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset8: MapFree_Multi(split=None, ROOT='${mapfree_root}', aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset9: Waymo_Multi(split=None, ROOT='${waymo_root}', aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset10: VirtualKITTI2_Multi(split=None, ROOT='${vkitti_root}', aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset11: TartanAir_Multi(split=None, ROOT='${tartanair_root}', aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+dataset12: MVS_Synth_Multi(split='train', ROOT='${mvs_synth_root}', aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
+
+# Training dataset mixture using your fully available processed subsets
+train_dataset: 30000 @ ${dataset1} + 60000 @ ${dataset2} + 20000 @ ${dataset3} + 30000 @ ${dataset4} + 20000 @ ${dataset5} + 20000 @ ${dataset6} + 20000 @ ${dataset7} + 60000 @ ${dataset8} + 40000 @ ${dataset9} + 5000 @ ${dataset10} + 20000 @ ${dataset11} + 20000 @ ${dataset12}
+
+# Test Dataset definition
+test_dataset: 1000 @ ARKitScenes_Multi(split='train', ROOT='${arkit_root}', resolution=224, num_views=${num_test_views}, seed=42, n_corres=${n_corres_test})
+
+# Seed and Optimizer Configuration optimized for RTX 5090 (32GB VRAM)
+seed: 0
+batch_size: 4
+accum_iter: 4
+gradient_checkpointing: True
+epochs: 7
+start_epoch: 0
+weight_decay: 0.05
+lr: 5e-5
+min_lr: 1e-6
+warmup_epochs: 1
+amp: 1
+mixed_precision: bf16
+optimizer: adamw
+force_cpu: False
+
+# Threading & Hardware parameters
+num_workers: 4
+world_size: 1
+local-rank: -1
+dist_url: 'env://'
+rank: 0
+gpu: 0
+distributed: False
+dist_backend: 'nccl'
+
+# Logging & Save frequencies
+eval_freq: 1
+save_freq: 1
+keep_freq: 2
+print_freq: 50
+print_img_freq: 500
+num_imgs_vis: 4
+
+save_dir: 'checkpoints'
+exp_name: 'production_raptor_recurrent_cut3r'
+task: 'cut3r'
+logdir: ./${save_dir}/${exp_name}/logs
+output_dir: ./${save_dir}/${exp_name}/
+
+hydra:
+  verbose: True
+  run:
+    dir: ./${save_dir}/${exp_name}

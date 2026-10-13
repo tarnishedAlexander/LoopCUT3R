@@ -28,7 +28,7 @@ dataset3: ARKitScenes_Multi(split='train', ROOT='${data_root}/dust3r_data/proces
   aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
 dataset4: ARKitScenesHighRes_Multi(split='train', ROOT="${data_root}/dust3r_data/processed_arkitscenes_highres",
   aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
-dataset5: ScanNetpp_Multi(split='train', ROOT="${data_root}/dust3r_data/processed_scannetpp/",
+dataset5: ScanNetpp_Multi(split='train', ROOT="${data_root}/disk12tb/scannet/processed_scannetpp/",
   aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
 dataset6: ScanNet_Multi(split='train', ROOT="${data_root}/dust3r_data/processed_scannet/",
   aug_crop=16, resolution=224, transform=SeqColorJitter, num_views=${num_views}, n_corres=${n_corres_train})
@@ -99,7 +99,7 @@ seed: 0
 batch_size: 16
 accum_iter: 1
 gradient_checkpointing: false
-epochs: 35
+epochs: 2
 start_epoch: 0
 weight_decay: 0.05
 lr: 5.0e-06
@@ -107,7 +107,7 @@ min_lr: 1.0e-06
 warmup_epochs: 1
 amp: 1
 
-num_workers: 8
+num_workers: 2
 world_size: 1
 local-rank: -1
 dist_url: 'env://'

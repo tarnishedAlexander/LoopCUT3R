@@ -57,7 +57,7 @@ dataset4: ARKitScenesHighRes_Multi(allow_repeat=False, split='train', ROOT="${da
   aug_crop=16, resolution=[(512, 384), (512, 336), (512, 288), (512, 256), (512, 208),
   (512, 144), (384, 512), (336, 512), (288, 512), (256, 512)], transform=SeqColorJitter,
   num_views=${num_views}, n_corres=${n_corres_train})
-dataset5: ScanNetpp_Multi(allow_repeat=False, split='train', ROOT="${data_root}/dust3r_data/processed_scannetpp/",
+dataset5: ScanNetpp_Multi(allow_repeat=False, split='train', ROOT="${data_root}/disk12tb/scannet/processed_scannetpp/",
   aug_crop=16, resolution=[(512, 384), (512, 336), (512, 288), (512, 256), (512, 208),
   (512, 144), (384, 512), (336, 512), (288, 512), (256, 512)], transform=SeqColorJitter,
   num_views=${num_views}, n_corres=${n_corres_train})
@@ -186,7 +186,7 @@ seed: 0
 batch_size: 16
 accum_iter: 1
 gradient_checkpointing: true
-epochs: 10
+epochs: 1
 start_epoch: 0
 weight_decay: 0.05
 lr: 1.0e-06
@@ -194,7 +194,7 @@ min_lr: 1.0e-07
 warmup_epochs: 0.5
 amp: 1
 
-num_workers: 8
+num_workers: 2
 world_size: 1
 local-rank: -1
 dist_url: 'env://'
