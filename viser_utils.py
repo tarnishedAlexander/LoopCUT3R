@@ -361,18 +361,7 @@ class PointCloudViewer:
         self.orig_img_list = [x[0] for x in color_list]
         self.via_points = []
 
-        # --- normalise scene to ~1-unit depth for display ----------------
-        # Metric checkpoints produce depths of 10-40 m; point_size=0.005 at
-        # that scale is sub-pixel.  We divide all display coordinates by the
-        # median Z so the scene sits in a 0-3 unit range where viser's
-        # default camera and point size work well.
-        all_z = np.concatenate(
-            [pc.reshape(-1, 3)[:, 2] for pc in pc_list], axis=0
-        )
-        finite_z = all_z[np.isfinite(all_z) & (all_z > 0)]
-        median_z = float(np.median(finite_z)) if len(finite_z) > 0 else 1.0
-        self.scene_scale = 1.0 / max(median_z, 1e-6)
-        # -----------------------------------------------------------------
+        self.scene_scale = 1.0
 
         gui_reset_up = self.server.gui.add_button(
             "Reset up direction",
@@ -675,7 +664,7 @@ class PointCloudViewer:
                 name=f"/frames/{step}/pred_pts",
                 points=pred_pts,
                 colors=color,
-                point_size=0.02,   # works at scene_scale-normalised coords
+                point_size=0.005,
             )
         )
 
@@ -698,7 +687,7 @@ class PointCloudViewer:
                 aspect=aspect,
                 wxyz=q,
                 position=t_display,
-                scale=0.05,  # proportional to normalised scene
+                scale=0.1,
                 color=(50, 205, 50),
             )
         )

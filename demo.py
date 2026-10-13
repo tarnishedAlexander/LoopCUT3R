@@ -75,6 +75,22 @@ def parse_args():
         default="./demo_tmp",
         help="value for tempfile.tempdir",
     )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8888,
+        help="Port to start Viser server on (forwarded ports: 8888, 6006, 5000).",
+    )
+    parser.add_argument(
+        "--model_cfg",
+        type=str,
+        default=None,
+        help=(
+            "Model config string (required for training checkpoints that lack embedded args). "
+            "Copy the 'model:' line from the corresponding training YAML, e.g. "
+            "\"ARCroco3DStereo(ARCroco3DStereoConfig(...))\""
+        ),
+    )
 
     return parser.parse_args()
 
@@ -367,13 +383,13 @@ def run_inference(args):
 
     # Load and prepare the model.
     print(f"Loading model from {args.model_path}...")
-    model = ARCroco3DStereo.from_pretrained(args.model_path).to(device)
+    model = ARCroco3DStereo.from_pretrained(args.model_path, model_cfg_str=args.model_cfg).to(device)
     model.eval()
 
     # Run inference.
     print("Running inference...")
     start_time = time.time()
-    outputs, state_args = inference(views, model, device)
+    outputs, state_args = inference_recurrent(views, model, device)
     total_time = time.time() - start_time
     per_frame_time = total_time / len(views)
     print(
@@ -404,7 +420,8 @@ def run_inference(args):
         edge_color_list=edge_colors,
         show_camera=True,
         vis_threshold=args.vis_threshold,
-        size = args.size
+        size = args.size,
+        port = args.port
     )
     viewer.run()
 
