@@ -14,6 +14,9 @@ import re
 from tqdm import tqdm
 import json
 from scipy.spatial.transform import Rotation
+import pyglet
+pyglet.options['headless'] = True
+os.environ['PYOPENGL_PLATFORM'] = 'egl'
 import pyrender
 import trimesh
 import trimesh.exchange.ply
@@ -26,7 +29,7 @@ import dust3r.utils.geometry as geometry
 
 inv = np.linalg.inv
 norm = np.linalg.norm
-REGEXPR_DSLR = re.compile(r"^DSC(?P<frameid>\d+).JPG$")
+REGEXPR_DSLR = re.compile(r"DSC(?P<frameid>\d+).JPG$")
 REGEXPR_IPHONE = re.compile(r"frame_(?P<frameid>\d+).jpg$")
 
 DEBUG_VIZ = None  # 'iou'
@@ -68,7 +71,7 @@ def get_frame_number(name, cam_type="dslr"):
         regex_expr = REGEXPR_IPHONE
     else:
         raise NotImplementedError(f"wrong {cam_type=} for get_frame_number")
-    matches = re.match(regex_expr, name)
+    matches = re.search(regex_expr, name)
     return matches["frameid"]
 
 
@@ -126,7 +129,8 @@ def load_sfm(sfm_dir, cam_type="dslr"):
         points3D[point_3d_idx] = tuple(map(float, point[1:4]))
         if len(point) > 8:
             for idx, point_2d_idx in zip(point[8::2], point[9::2]):
-                observations[idx].append((point_3d_idx, int(point_2d_idx)))
+                if idx in observations:
+                    observations[idx].append((point_3d_idx, int(point_2d_idx)))
 
     return img_idx, img_infos, points3D, observations
 

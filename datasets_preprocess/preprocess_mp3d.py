@@ -121,7 +121,11 @@ def main():
     for seq in tqdm(seqs, desc="Sequences"):
         # The sequence directory structure assumes that images and depth files are stored
         # under a subdirectory with the same name as the sequence.
-        seq_dir = os.path.join(root, seq, seq)
+        nested_dir = os.path.join(root, seq, seq)
+        if os.path.isdir(nested_dir):
+            seq_dir = nested_dir
+        else:
+            seq_dir = os.path.join(root, seq)
 
         img_dir = os.path.join(seq_dir, "undistorted_color_images")
         depth_dir = os.path.join(seq_dir, "undistorted_depth_images")

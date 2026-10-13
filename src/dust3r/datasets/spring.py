@@ -22,7 +22,13 @@ class Spring(BaseMultiViewDataset):
         self.loaded_data = self._load_data()
 
     def _load_data(self):
-        self.scenes = os.listdir(self.ROOT)
+        # Filter to numeric scene directories only (e.g. 0001, 0002 ...) to
+        # avoid picking up stray entries injected by VFS listdir hooks or
+        # miscellaneous subdirectories at the root level.
+        self.scenes = sorted([
+            d for d in os.listdir(self.ROOT)
+            if d.isdigit() and os.path.isdir(osp.join(self.ROOT, d))
+        ])
 
         offset = 0
         scenes = []

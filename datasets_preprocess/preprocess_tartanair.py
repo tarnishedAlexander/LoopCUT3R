@@ -34,7 +34,7 @@ def get_parser():
 def main(rootdir, outdir):
     os.makedirs(outdir, exist_ok=True)
     envs = [
-        f for f in sorted(os.listdir(rootdir)) if os.path.isdir(osp.join(rootdir, f))
+        f for f in sorted(os.listdir(rootdir)) if os.path.isdir(osp.join(rootdir, f)) and not f.startswith(".")
     ]
     for env in tqdm(envs):
         for difficulty in ["Easy", "Hard"]:
@@ -95,13 +95,13 @@ def main(rootdir, outdir):
                     w2c = w2c[[1, 2, 0, 3]]
                     c2w = np.linalg.inv(w2c)
                     K = intrinsics
-                    # copy
-                    shutil.copy(rgb_path, out_rgb_path)
-                    shutil.copy(depth_path, out_depth_path)
+                    # copy -> modified to symlink
+                    os.symlink(os.path.abspath(rgb_path), out_rgb_path)
+                    os.symlink(os.path.abspath(depth_path), out_depth_path)
                     if fflow_path is not None:
-                        shutil.copy(fflow_path, out_fflow_path)
+                        os.symlink(os.path.abspath(fflow_path), out_fflow_path)
                     if mask_path is not None:
-                        shutil.copy(mask_path, out_mask_path)
+                        os.symlink(os.path.abspath(mask_path), out_mask_path)
                     np.savez(
                         osp.join(outdir, env, difficulty, subscene, f"{i:06d}_cam.npz"),
                         camera_pose=c2w.astype(np.float32),

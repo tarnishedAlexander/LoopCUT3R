@@ -18,8 +18,7 @@ import os
 import os.path as osp
 import argparse
 import numpy as np
-import open3d as o3d
-import pyrender
+
 import PIL.Image as Image
 import cv2
 import shutil
@@ -249,12 +248,19 @@ def process_sequence(category, obj, data_dir, output_dir):
          d. Save the processed image and camera metadata.
     """
 
+    # Determine the actual object directory name (handles both unzipped folders and zip files)
+    obj_path = osp.join(data_dir, "MVImgNet_by_categories", category, obj)
+    if osp.isdir(obj_path):
+        obj_name = obj
+    else:
+        obj_name = obj[:-4] if len(obj) > 4 else obj
+
     # Define directories.
-    seq_dir = osp.join(data_dir, "MVImgNet_by_categories", category, obj[:-4])
+    seq_dir = osp.join(data_dir, "MVImgNet_by_categories", category, obj_name)
     rgb_dir = osp.join(seq_dir, "images")
     sfm_dir = osp.join(seq_dir, "sparse", "0")
 
-    output_scene_dir = osp.join(output_dir, f"{category}_{obj[:-4]}")
+    output_scene_dir = osp.join(output_dir, f"{category}_{obj_name}")
     output_rgb_dir = osp.join(output_scene_dir, "rgb")
     output_cam_dir = osp.join(output_scene_dir, "cam")
     os.makedirs(output_rgb_dir, exist_ok=True)
@@ -316,7 +322,10 @@ def main():
     for cat in categories:
         objects = sorted(os.listdir(osp.join(data_dir, "MVImgNet_by_categories", cat)))
         for obj in objects:
-            process_sequence(cat, obj, data_dir, output_dir)
+            try:
+                process_sequence(cat, obj, data_dir, output_dir)
+            except Exception as e:
+                print(f"Warning: Failed to process sequence {cat}/{obj}: {e}")
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ def get_parser():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--blendedmvs_dir", required=True)
-    parser.add_argument("--precomputed_pairs", required=True)
+    parser.add_argument("--precomputed_pairs", default=None)
     parser.add_argument("--output_dir", default="data/blendedmvs_processed")
     return parser
 
@@ -57,13 +57,14 @@ def main(db_root, pairs_path, output_dir):
         parallel_threads(load_crop_and_save, func_args, star_args=True, leave=False)
 
     # verify that all pairs are there
-    pairs = np.load(pairs_path)
-    for seqh, seql, img1, img2, score in tqdm(pairs):
-        for view_index in [img1, img2]:
-            impath = osp.join(
-                output_dir, f"{seqh:08x}{seql:016x}", f"{view_index:08n}.jpg"
-            )
-            assert osp.isfile(impath), f"missing image at {impath=}"
+    if pairs_path is not None:
+        pairs = np.load(pairs_path)
+        for seqh, seql, img1, img2, score in tqdm(pairs):
+            for view_index in [img1, img2]:
+                impath = osp.join(
+                    output_dir, f"{seqh:08x}{seql:016x}", f"{view_index:08n}.jpg"
+                )
+                assert osp.isfile(impath), f"missing image at {impath=}"
 
     print(f">> Done, saved everything in {output_dir}/")
 

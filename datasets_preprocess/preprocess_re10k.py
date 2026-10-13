@@ -80,6 +80,7 @@ def process_frame(task):
             A string with an error message if something fails; otherwise None on success.
     """
     seq_dir, out_rgb_dir, out_cam_dir, raw_line = task
+    timestamp = None
 
     try:
         # Unpack the raw metadata line
@@ -149,6 +150,8 @@ def process_sequence(seq, root_dir, info_dir, out_dir):
         scene_info = np.loadtxt(
             scene_info_path, delimiter=" ", dtype=np.float64, skiprows=1
         )
+        if scene_info.ndim == 1:
+            scene_info = scene_info[np.newaxis, :]
     except Exception as e:
         tqdm.write(f"Error reading scene info for {seq}: {e}")
         return

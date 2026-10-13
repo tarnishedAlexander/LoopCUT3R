@@ -22,7 +22,7 @@ class MVImgNet_Multi(BaseMultiViewDataset):
         self.loaded_data = self._load_data()
 
     def _load_data(self):
-        self.scenes = os.listdir(self.ROOT)
+        self.scenes = sorted([d for d in os.listdir(self.ROOT) if osp.isdir(osp.join(self.ROOT, d))])
 
         offset = 0
         scenes = []
@@ -35,6 +35,9 @@ class MVImgNet_Multi(BaseMultiViewDataset):
         for scene in tqdm(self.scenes):
             scene_dir = osp.join(self.ROOT, scene)
             rgb_dir = osp.join(scene_dir, "rgb")
+            cam_dir = osp.join(scene_dir, "cam")
+            if not osp.isdir(rgb_dir) or not osp.isdir(cam_dir):
+                continue
             basenames = sorted(
                 [f[:-4] for f in os.listdir(rgb_dir) if f.endswith(".jpg")]
             )

@@ -32,15 +32,11 @@ def run_patch_match_stereo(root_colmap_dir, root_img_dir):
             out_dir = os.path.join(scene_dir, f"dense{i}")
             if not os.path.exists(sub_dir):
                 continue
-            if os.path.exists(out_dir) and os.path.exists(
-                os.path.join(out_dir, f"stereo/depth_maps/{sub}")
-            ):
-                if len(
-                    glob.glob(
-                        os.path.join(out_dir, f"stereo/depth_maps/{sub}/*geometric.bin")
-                    )
-                ) == len(glob.glob(os.path.join(img_dir, sub, "*.jpg"))):
-                    print(f"depth maps already computed, skip {sub_dir}")
+            if os.path.exists(out_dir) and os.path.exists(os.path.join(out_dir, "images")) and os.path.exists(os.path.join(out_dir, "sparse")):
+                expected_imgs = glob.glob(os.path.join(img_dir, sub, "*.jpg"))
+                undistorted_imgs = glob.glob(os.path.join(out_dir, "images", "*.jpg"))
+                if len(expected_imgs) > 0 and len(undistorted_imgs) == len(expected_imgs):
+                    print(f"undistortion already completed, skip {sub_dir}")
                     continue
 
             print(sub_dir)

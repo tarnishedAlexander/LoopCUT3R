@@ -31,6 +31,10 @@ class MegaDepth_Multi(BaseMultiViewDataset):
             self.all_scenes = data["scenes"]
             self.all_images = data["images"]
             self.sets = data["sets"]
+        if self.all_scenes.dtype.kind == 'S':
+            self.all_scenes = self.all_scenes.astype(str)
+        if self.all_images.dtype.kind == 'S':
+            self.all_images = self.all_images.astype(str)
 
     def __len__(self):
         return len(self.sets)
@@ -45,7 +49,7 @@ class MegaDepth_Multi(BaseMultiViewDataset):
         scenes = (scene,) if isinstance(scene, str) else tuple(scene)
         scene_id = [s.startswith(scenes) for s in self.all_scenes]
         assert any(scene_id), "no scene found"
-        valid = np.in1d(self.sets[:, 0], np.nonzero(scene_id)[0])
+        valid = np.isin(self.sets[:, 0], np.nonzero(scene_id)[0])
         if instances:
             raise NotImplementedError("selecting instances not implemented")
         if opposite:

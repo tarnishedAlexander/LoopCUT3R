@@ -5,7 +5,8 @@ import decimal
 import argparse
 import math
 from bisect import bisect_left
-from PIL import Image
+from PIL import Image, ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 import numpy as np
 import quaternion
 from scipy import interpolate
@@ -17,15 +18,15 @@ def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--arkitscenes_dir",
-        default="data/dust3r_data/data_arkitscenes/raw",
+        default="/app/recurrentTransformer/dataset/disk12tb/disk1tb/ARKitScenes/raw",
     )
     parser.add_argument(
         "--precomputed_pairs",
-        default="data/dust3r_data/data_arkitscenes/arkitscenes_pairs",
+        default="/app/recurrentTransformer/dataset/disk12tb/disk1tb/arkitscenes_pairs",
     )
     parser.add_argument(
         "--output_dir",
-        default="data/dust3r_data/processed_arkitscenes",
+        default="/app/recurrentTransformer/dataset/disk12tb/disk1tb/processed_arkitscenes",
     )
     return parser
 
@@ -100,7 +101,7 @@ def read_traj(traj_path):
 def main(rootdir, pairsdir, outdir):
     os.makedirs(outdir, exist_ok=True)
 
-    subdirs = ["Test", "Training"]
+    subdirs = ["Training"]
     for subdir in subdirs:
         # STEP 1: list all scenes
         outsubdir = osp.join(outdir, subdir)
@@ -111,13 +112,10 @@ def main(rootdir, pairsdir, outdir):
 
         valid_scenes = []
         for scene_subdir in tqdm(scene_dirs):
-            if not os.path.isdir(osp.join(rootdir, "Test", scene_subdir)):
-                if not os.path.isdir(osp.join(rootdir, "Training", scene_subdir)):
-                    continue
-                else:
-                    root_subdir = "Training"
+            if not os.path.isdir(osp.join(rootdir, "Training", scene_subdir)):
+                continue
             else:
-                root_subdir = "Test"
+                root_subdir = "Training"
             out_scene_subdir = osp.join(outsubdir, scene_subdir)
             os.makedirs(out_scene_subdir, exist_ok=True)
 
@@ -144,11 +142,20 @@ def main(rootdir, pairsdir, outdir):
             if osp.isfile(scene_metadata_path):
                 continue
             else:
+                # Check if trajectory file exists before attempting to parse
+                if not osp.isfile(traj_path):
+                    print(f"Skipping {scene_subdir}: trajectory file missing at {traj_path}", flush=True)
+                    continue
+                
                 print(f"parsing {scene_subdir}")
                 # loads traj
-                timestamps, poses, quaternions, poses_cam_to_world = read_traj(
-                    traj_path
-                )
+                try:
+                    timestamps, poses, quaternions, poses_cam_to_world = read_traj(
+                        traj_path
+                    )
+                except Exception as e:
+                    print(f"Warning: failed to read trajectory for {scene_subdir}: {e}. Skipping scene.", flush=True)
+                    continue
 
                 poses = np.array(poses)
                 quaternions = np.array(quaternions, dtype=np.quaternion)
@@ -191,6 +198,7 @@ def main(rootdir, pairsdir, outdir):
                         break
                 if not all_exist:
                     continue
+                corrupted = False
 
                 for basename in images:
                     img_out = os.path.join(
@@ -203,8 +211,24 @@ def main(rootdir, pairsdir, outdir):
                     vga_wide_path = osp.join(rgb_dir, basename)
                     depth_path = osp.join(depth_dir, basename)
 
-                    img = Image.open(vga_wide_path)
+                    try:
+                        img = Image.open(vga_wide_path)
+                    except Exception as e:
+                        print(
+                            f"Warning: failed to open image {vga_wide_path}: {e}. Skipping scene {scene_subdir}",
+                            flush=True,
+                        )
+                        corrupted = True
+                        break
+
                     depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+                    if depth is None:
+                        print(
+                            f"Warning: failed to read depth {depth_path} with cv2. Skipping scene {scene_subdir}",
+                            flush=True,
+                        )
+                        corrupted = True
+                        break
 
                     # rotate the image
                     if sky_direction_scene == "RIGHT":

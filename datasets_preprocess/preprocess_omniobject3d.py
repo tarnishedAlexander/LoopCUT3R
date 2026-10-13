@@ -196,17 +196,10 @@ def main():
         args.max_workers if args.max_workers is not None else os.cpu_count() or 1
     )
 
-    # Prepare processing arguments for each scene in parallel
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        scene_args_list = list(
-            tqdm(
-                executor.map(
-                    lambda s: prepare_scene_args(s, input_root, output_root), scenes
-                ),
-                total=len(scenes),
-                desc="Preparing scenes",
-            )
-        )
+    # Prepare processing arguments for each scene
+    scene_args_list = []
+    for s in tqdm(scenes, desc="Preparing scenes"):
+        scene_args_list.append(prepare_scene_args(s, input_root, output_root))
 
     # Filter out scenes where preparation failed
     scene_frame_args = [fa for fa in scene_args_list if fa is not None]

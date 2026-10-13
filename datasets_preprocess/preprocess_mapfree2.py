@@ -32,6 +32,8 @@ def main(rootdir, outdir):
         ]
         for subseq in subseqs:
             sparse_dir = osp.join(rootdir, env, subseq, "sparse")
+            if not os.path.exists(sparse_dir):
+                continue
             images_dir = osp.join(rootdir, env, subseq, "images")
             run(sparse_dir, sparse_dir)
             intrins_file = sparse_dir + "/cameras.txt"
@@ -96,18 +98,43 @@ def main(rootdir, outdir):
                     images.append(img_name)
                     intrinsics.append(cam_params[cam_id])
 
+            # Check if already processed
+            out_rgb_dir = osp.join(outdir, env, subseq, "rgb")
+            out_cam_dir = osp.join(outdir, env, subseq, "cam")
+            if os.path.exists(out_rgb_dir) and os.path.exists(out_cam_dir):
+                existing_rgbs = len([f for f in os.listdir(out_rgb_dir) if f.endswith(".jpg")])
+                existing_cams = len([f for f in os.listdir(out_cam_dir) if f.endswith(".npz")])
+                if existing_rgbs == len(images) and existing_cams == len(images):
+                    continue
+
             os.makedirs(osp.join(outdir, env, subseq), exist_ok=True)
-            os.makedirs(osp.join(outdir, env, subseq, "rgb"), exist_ok=True)
-            os.makedirs(osp.join(outdir, env, subseq, "cam"), exist_ok=True)
+            os.makedirs(out_rgb_dir, exist_ok=True)
+            os.makedirs(out_cam_dir, exist_ok=True)
 
             for i, img_name in enumerate(tqdm(images)):
                 img_path = os.path.join(images_dir, img_name)
-                rgb = Image.open(img_path)
-                intrinsic = intrinsics[i]
-                pose = poses[i]
-                # save all
-                basename = img_name.split("/")[-1]
-                rgb.save(osp.join(outdir, env, subseq, "rgb", basename))
+                
+                # Check for corruption and attempt fallback to original distorted image if needed
+                try:
+                    with Image.open(img_path) as rgb:
+                        rgb.load()
+                except Exception as e:
+                    parent_dataset_dir = osp.dirname(osp.dirname(rootdir))
+                    fallback_img_path = osp.join(parent_dataset_dir, "train", env, img_name)
+                    print(f"\n[WARNING] Image {img_path} is corrupted: {e}. Falling back to original: {fallback_img_path}")
+                    img_path = fallback_img_path
+
+                try:
+                    with Image.open(img_path) as rgb:
+                        intrinsic = intrinsics[i]
+                        pose = poses[i]
+                        # save all
+                        basename = img_name.split("/")[-1]
+                        rgb.save(osp.join(outdir, env, subseq, "rgb", basename))
+                except Exception as e_save:
+                    print(f"\n[ERROR] Failed to process image {img_path}: {e_save}. Skipping this frame.")
+                    continue
+
                 np.savez(
                     osp.join(
                         outdir, env, subseq, "cam", basename.replace(".jpg", ".npz")
