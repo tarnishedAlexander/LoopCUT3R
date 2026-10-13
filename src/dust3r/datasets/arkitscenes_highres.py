@@ -49,10 +49,24 @@ class ARKitScenesHighRes_Multi(BaseMultiViewDataset):
         for scene in all_scenes:
             scene_dir = osp.join(self.ROOT, self.split, scene)
             with np.load(osp.join(scene_dir, "scene_metadata.npz")) as data:
-                imgs_with_indices = sorted(
-                    enumerate(data["images"]), key=lambda x: x[1]
-                )
-                imgs = [x[1] for x in imgs_with_indices]
+                # Image names are derived from vga_wide/ listing (sorted by
+                # timestamp), since the preprocessed h5 stores only intrinsics
+                # and trajectories — not an explicit 'images' array.
+                if "images" in data:
+                    imgs_with_indices = sorted(
+                        enumerate(data["images"]), key=lambda x: x[1]
+                    )
+                    imgs = [x[1] for x in imgs_with_indices]
+                    indices = [x[0] for x in imgs_with_indices]
+                else:
+                    # Derive image names from vga_wide directory
+                    vga_dir = osp.join(scene_dir, "vga_wide")
+                    imgs = sorted(
+                        [f[:-4] + ".png" for f in os.listdir(vga_dir)
+                         if f.endswith(".jpg")],
+                        key=lambda x: float(x.split("_")[1][:-4])
+                    )
+                    indices = list(range(len(imgs)))
                 cut_off = (
                     self.num_views
                     if not self.allow_repeat
@@ -61,12 +75,11 @@ class ARKitScenesHighRes_Multi(BaseMultiViewDataset):
                 if len(imgs) < cut_off:
                     print(f"Skipping {scene}")
                     continue
-                indices = [x[0] for x in imgs_with_indices]
                 tsps = np.array(
                     [float(img_name.split("_")[1][:-4]) for img_name in imgs]
                 )
-                assert [img[:8] == scene for img in imgs], f"{scene}, {imgs}"
-                num_imgs = data["images"].shape[0]
+                assert all(img[:8] == scene for img in imgs), f"{scene}, {imgs[:3]}"
+                num_imgs = len(imgs)
                 img_ids = list(np.arange(num_imgs) + offset)
                 start_img_ids_ = img_ids[: num_imgs - cut_off + 1]
 

@@ -1,3 +1,15 @@
+import numpy as _np
+# H5VFS-extracted npz files store string arrays as |S (fixed-length bytes) dtype.
+# Patch NpzFile.__getitem__ once here so every dataset loader gets str arrays
+# transparently, without changing each loader individually.
+_orig_npz_getitem = _np.lib.npyio.NpzFile.__getitem__
+def _npz_getitem_auto_str(self, key):
+    arr = _orig_npz_getitem(self, key)
+    if hasattr(arr, 'dtype') and arr.dtype.kind == 'S':
+        return arr.astype(str)
+    return arr
+_np.lib.npyio.NpzFile.__getitem__ = _npz_getitem_auto_str
+
 from .utils.transforms import *
 from .base.batched_sampler import BatchedRandomSampler  # noqa
 from .arkitscenes import ARKitScenes_Multi  # noqa
@@ -128,6 +140,26 @@ def _make_sampler(dataset, batch_size, shuffle, drop_last, world_size, rank, fix
     raise _SamplerSignatureError(str(last_signature_error))
 
 
+def _worker_init_fn(worker_id):
+    """Configure each dataloader worker for minimal memory footprint.
+
+    - MALLOC_TRIM_THRESHOLD_: Force glibc to return free pages to OS aggressively.
+    - MALLOC_MMAP_THRESHOLD_: Use mmap for allocations >= 64 KiB so they are
+      immediately reclaimed on free() instead of being held in the arena.
+    """
+    import os
+    import ctypes
+    os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"
+    os.environ["MALLOC_MMAP_THRESHOLD_"] = "65536"
+    try:
+        libc = ctypes.CDLL("libc.so.6")
+        # M_TRIM_THRESHOLD = -1, M_MMAP_THRESHOLD = -3
+        libc.mallopt(-1, 65536)
+        libc.mallopt(-3, 65536)
+    except Exception:
+        pass
+
+
 def get_data_loader(
     dataset,
     batch_size,
@@ -137,6 +169,7 @@ def get_data_loader(
     pin_mem=True,
     accelerator: Accelerator = None,
     fixed_length=False,
+    prefetch_factor: int = 2,
 ):
     import torch
 
@@ -149,6 +182,12 @@ def get_data_loader(
         )
 
     world_size, rank = _get_world_size_and_rank(accelerator)
+
+    # Disable persistent workers: with h5py handles and large datasets,
+    # persistent workers accumulate memory over time via Python/glibc
+    # fragmentation. Recycling workers between epochs releases all of it.
+    persistent = False
+    eff_prefetch = prefetch_factor if num_workers > 0 else None
 
     try:
         sampler = _make_sampler(
@@ -167,6 +206,9 @@ def get_data_loader(
             batch_sampler=sampler,
             num_workers=num_workers,
             pin_memory=pin_mem,
+            persistent_workers=persistent,
+            prefetch_factor=eff_prefetch,
+            worker_init_fn=_worker_init_fn,
         )
 
     except (AttributeError, NotImplementedError, _SamplerSignatureError):
@@ -179,6 +221,10 @@ def get_data_loader(
             num_workers=num_workers,
             pin_memory=pin_mem,
             drop_last=drop_last,
+            persistent_workers=persistent,
+            prefetch_factor=eff_prefetch,
+            worker_init_fn=_worker_init_fn,
         )
 
     return data_loader
+

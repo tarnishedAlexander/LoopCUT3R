@@ -16,6 +16,9 @@ from dust3r.utils.image import imread_cv2
 
 
 class MapFree_Multi(BaseMultiViewDataset):
+    # 'groups' is stored as a numpy.memmap on disk instead of in the scan cache pickle.
+    # Halves startup RAM from 3.4 GB to near-zero for this attr.
+    _SCAN_CACHE_SKIP_ATTRS = ['groups']
 
     def __init__(self, ROOT, *args, **kwargs):
         self.ROOT = ROOT
@@ -25,6 +28,64 @@ class MapFree_Multi(BaseMultiViewDataset):
         super().__init__(*args, **kwargs)
 
         self._load_data()
+
+    # ── memmap helpers ──────────────────────────────────────────────────────────
+
+    def _mm_path(self):
+        """Physical path for the groups memmap file (outside VFS root)."""
+        return osp.join(osp.dirname(self.ROOT.rstrip('/')), '.mapfree_groups_mm.dat')
+
+    def _scan_cache_pre_save(self, cache_path):
+        """Called before scan cache is saved (slow path). Writes groups to memmap."""
+        if not hasattr(self, 'groups') or isinstance(self.groups, np.memmap):
+            return
+        mm_path = self._mm_path()
+        shape = self.groups.shape
+        expected = int(shape[0]) * int(shape[1]) * 4
+        if not osp.exists(mm_path) or osp.getsize(mm_path) != expected:
+            print(f"[MapFree] Writing groups memmap ({expected/1e9:.2f} GB) → {mm_path}")
+            mm = np.memmap(mm_path, dtype='float32', mode='w+', shape=shape)
+            mm[:] = self.groups.astype('float32')
+            mm.flush()
+            del mm
+        self._groups_mm_shape = tuple(int(x) for x in shape)
+        del self.groups
+        import gc; gc.collect()
+        self.groups = np.memmap(mm_path, dtype='float32', mode='r', shape=shape)
+
+    def _scan_cache_post_restore(self, cache_path):
+        """Called after scan cache is loaded (fast path). Opens groups memmap."""
+        # Legacy: old cache still had groups as a numpy array — migrate on the fly.
+        if hasattr(self, 'groups') and isinstance(self.groups, np.ndarray) and \
+                not isinstance(self.groups, np.memmap):
+            self._scan_cache_pre_save(cache_path)
+            # Re-save the slim cache (groups now excluded, _groups_mm_shape added)
+            try:
+                skip = set(type(self)._SCAN_CACHE_SKIP_ATTRS)
+                to_save = {}
+                for k, v in self.__dict__.items():
+                    if k in skip:
+                        continue
+                    try:
+                        pickle.dumps(v)
+                        to_save[k] = v
+                    except Exception:
+                        pass
+                with open(cache_path, 'wb') as f:
+                    pickle.dump(to_save, f)
+                print(f"[MapFree] Migrated scan cache to memmap layout ({osp.getsize(cache_path)/1e6:.1f} MB)")
+            except Exception as e:
+                print(f"[MapFree] Could not migrate scan cache: {e}")
+            return
+        # Normal fast path: open the pre-existing memmap file.
+        mm_path = self._mm_path()
+        shape = getattr(self, '_groups_mm_shape', None)
+        if shape is None or not osp.exists(mm_path):
+            raise RuntimeError(
+                f"[MapFree] groups memmap missing: {mm_path}. "
+                "Delete the scan cache pkl and re-run to regenerate."
+            )
+        self.groups = np.memmap(mm_path, dtype='float32', mode='r', shape=tuple(shape))
 
     def imgid2path(self, img_id, scene):
         first_seq_id, first_frame_id = img_id
@@ -41,11 +102,30 @@ class MapFree_Multi(BaseMultiViewDataset):
         first_frame_id = int(filename[6:-4])
         return [first_seq_id, first_frame_id]
 
+    def _open_h5_file(self, h5_file_path):
+        """Open an h5 file — works whether stored on disk or as a nested key
+        inside a VFS-backed outer .h5 archive."""
+        import io
+        try:
+            from dust3r.datasets.utils.h5_vfs import H5VFSRegistry
+            for root, outer_h5_path in H5VFSRegistry._registries:
+                if h5_file_path.startswith(root + os.sep) or h5_file_path.startswith(root + "/"):
+                    rel = os.path.relpath(h5_file_path, root)
+                    handle = H5VFSRegistry.get_handle(outer_h5_path)
+                    if rel in handle:
+                        obj = handle[rel]
+                        if hasattr(obj, 'dtype'):  # Dataset → raw bytes
+                            raw = bytes(obj[()])
+                            return h5py.File(io.BytesIO(raw), "r")
+        except Exception:
+            pass
+        return h5py.File(h5_file_path, "r")
+
     def _load_data(self):
         cache_file = f"{self.ROOT}/cached_metadata_50_col_only.h5"
         if os.path.exists(cache_file):
             print(f"Loading cached metadata from {cache_file}")
-            with h5py.File(cache_file, "r") as hf:
+            with self._open_h5_file(cache_file) as hf:
                 self.scenes = list(map(lambda x: x.decode("utf-8"), hf["scenes"][:]))
                 self.sceneids = hf["sceneids"][:]
                 self.scope = hf["scope"][:]
@@ -104,9 +184,26 @@ class MapFree_Multi(BaseMultiViewDataset):
                     offset += num_imgs
 
                 # image collections
-                metadata = pickle.load(
-                    open(os.path.join(self.ROOT, scene, "metadata.pkl"), "rb")
-                )
+                metadata_path = os.path.join(self.ROOT, scene, "metadata.pkl")
+                if os.path.exists(metadata_path):
+                    metadata = pickle.load(open(metadata_path, "rb"))
+                else:
+                    raw_scene_dir = os.path.join(os.path.dirname(self.ROOT), "train", scene)
+                    overlaps_npz = os.path.join(raw_scene_dir, "overlaps.npz")
+                    if not os.path.exists(overlaps_npz):
+                        raise FileNotFoundError(f"Neither metadata.pkl nor overlaps.npz found for scene {scene}")
+                    overlaps_data = np.load(overlaps_npz, allow_pickle=True)
+                    idxs = overlaps_data["idxs"]
+                    overlaps = overlaps_data["overlaps"]
+                    metadata = {}
+                    for idx_idx in range(len(overlaps)):
+                        score = float(overlaps[idx_idx])
+                        if score <= 0.0:
+                            continue
+                        s1, f1, s2, f2 = map(int, idxs[idx_idx])
+                        ref_img = (s1, f1)
+                        other_img = ((s2, f2), score)
+                        metadata.setdefault(ref_img, []).append(other_img)
                 ref_imgs = list(metadata.keys())
                 img_groups = []
                 for ref_img in ref_imgs:
@@ -233,12 +330,20 @@ class MapFree_Multi(BaseMultiViewDataset):
             cam_path = img_path.replace("rgb", "cam").replace(".jpg", ".npz")
             sky_mask_path = img_path.replace("rgb", "sky_mask")
             image = imread_cv2(img_path)
-            depthmap = np.load(depth_path)
+            
+            if os.path.exists(depth_path):
+                depthmap = np.load(depth_path)
+            else:
+                depthmap = np.zeros(image.shape[:2], dtype=np.float32)
+                
             camera_params = np.load(cam_path)
-            sky_mask = cv2.imread(sky_mask_path, cv2.IMREAD_UNCHANGED) >= 127
-
             intrinsics = camera_params["intrinsic"].astype(np.float32)
             camera_pose = camera_params["pose"].astype(np.float32)
+            
+            if os.path.exists(sky_mask_path):
+                sky_mask = cv2.imread(sky_mask_path, cv2.IMREAD_UNCHANGED) >= 127
+            else:
+                sky_mask = np.zeros(image.shape[:2], dtype=bool)
 
             depthmap[sky_mask] = -1.0
             depthmap[depthmap > 400.0] = 0.0

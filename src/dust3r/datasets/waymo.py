@@ -21,9 +21,27 @@ class Waymo_Multi(BaseMultiViewDataset):
         assert self.split is None
         self._load_data()
 
+    def _open_h5_file(self, h5_file_path):
+        """Open an h5 file — works whether on disk or nested inside a VFS outer .h5 archive."""
+        import io
+        try:
+            from dust3r.datasets.utils.h5_vfs import H5VFSRegistry
+            for root, outer_h5_path in H5VFSRegistry._registries:
+                if h5_file_path.startswith(root + os.sep) or h5_file_path.startswith(root + "/"):
+                    rel = os.path.relpath(h5_file_path, root)
+                    handle = H5VFSRegistry.get_handle(outer_h5_path)
+                    if rel in handle:
+                        obj = handle[rel]
+                        if hasattr(obj, 'dtype'):
+                            raw = bytes(obj[()])
+                            return h5py.File(io.BytesIO(raw), "r")
+        except Exception:
+            pass
+        return h5py.File(h5_file_path, "r")
+
     def load_invalid_dict(self, h5_file_path):
         invalid_dict = {}
-        with h5py.File(h5_file_path, "r") as h5f:
+        with self._open_h5_file(h5_file_path) as h5f:
             for scene in h5f:
                 data = h5f[scene]["invalid_pairs"][:]
                 invalid_pairs = set(

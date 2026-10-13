@@ -22,7 +22,8 @@ class BlendedMVS_Multi(BaseMultiViewDataset):
         self._load_data()
 
     def _load_data(self):
-        self.data_dict = self.read_h5_file(os.path.join(self.ROOT, "new_overlap.h5"))
+        overlap_path = os.path.join(self.ROOT, "new_overlap.h5")
+        self.data_dict = self.read_h5_file(overlap_path)
         self.num_imgs = sum(
             [len(self.data_dict[s]["basenames"]) for s in self.data_dict.keys()]
         )
@@ -30,11 +31,33 @@ class BlendedMVS_Multi(BaseMultiViewDataset):
         self.invalid_scenes = []
         self.is_reachable_cache = {scene: {} for scene in self.data_dict.keys()}
 
+    def _open_h5_file(self, h5_file_path):
+        """Open an h5 file — works whether stored on disk or as a nested key
+        inside a VFS-backed outer .h5 archive."""
+        import io
+        try:
+            from dust3r.datasets.utils.h5_vfs import H5VFSRegistry
+            for root, outer_h5_path in H5VFSRegistry._registries:
+                if h5_file_path.startswith(root + os.sep) or h5_file_path.startswith(root + "/"):
+                    rel = os.path.relpath(h5_file_path, root)
+                    handle = H5VFSRegistry.get_handle(outer_h5_path)
+                    if rel in handle:
+                        obj = handle[rel]
+                        if hasattr(obj, 'dtype'):  # Dataset → raw bytes
+                            raw = bytes(obj[()])
+                            return h5py.File(io.BytesIO(raw), "r")
+        except Exception:
+            pass
+        # Fallback: open directly from disk
+        return h5py.File(h5_file_path, "r")
+
     def read_h5_file(self, h5_file_path):
         data_dict = {}
         self.all_ref_imgs = []
-        with h5py.File(h5_file_path, "r") as f:
+        with self._open_h5_file(h5_file_path) as f:
             for scene_dir in tqdm(f.keys()):
+                if not os.path.exists(os.path.join(self.ROOT, scene_dir)):
+                    continue
                 group = f[scene_dir]
                 basenames = group["basenames"][:]
                 indices = group["indices"][:]
@@ -194,7 +217,7 @@ class BlendedMVS_Multi(BaseMultiViewDataset):
     def generate_sequence(
         self, scene, adj_list, num_views, start_index, rng, allow_repeat=False
     ):
-        cutoff = num_views if not allow_repeat else max(num_views // 5, 3)
+        cutoff = num_views if not allow_repeat else min(max(num_views // 5, 3), num_views)
         if start_index in self.is_reachable_cache[scene]:
             if not self.is_reachable_cache[scene][start_index]:
                 print(
@@ -228,7 +251,15 @@ class BlendedMVS_Multi(BaseMultiViewDataset):
         invalid_seq = True
         ordered_video = False
 
+        attempts = 0
+        max_attempts = max(32, len(self.all_ref_imgs))
         while invalid_seq:
+            attempts += 1
+            if attempts > max_attempts:
+                raise RuntimeError(
+                    f"BlendedMVS: failed to sample {num_views} views after "
+                    f"{max_attempts} attempts (scene={scene_info}, ref={ref_img_idx})."
+                )
             basenames = self.data_dict[scene_info]["basenames"]
             if (
                 sum(
@@ -252,6 +283,7 @@ class BlendedMVS_Multi(BaseMultiViewDataset):
 
             if imgs_idxs is None:
                 random_direction = 2 * rng.choice(2) - 1
+                found = False
                 for offset in range(1, len(basenames)):
                     tentative_im_idx = (
                         ref_img_idx + (random_direction * offset)
@@ -261,7 +293,11 @@ class BlendedMVS_Multi(BaseMultiViewDataset):
                         or self.is_reachable_cache[scene_info][tentative_im_idx]
                     ):
                         ref_img_idx = tentative_im_idx
+                        found = True
                         break
+                if not found:
+                    idx = rng.integers(low=0, high=len(self.all_ref_imgs))
+                    scene_info, ref_img_idx = self.all_ref_imgs[idx]
             else:
                 invalid_seq = False
         views = []

@@ -22,6 +22,35 @@ class DL3DV_Multi(BaseMultiViewDataset):
         self.loaded_data = self._load_data()
 
     def _load_data(self):
+        # Register H5VFS before any filesystem access so os.listdir/exists go through the VFS.
+        # Needed because _load_data is called after super().__init__(), bypassing the base-class
+        # VFS registration that other datasets get via _scan_cache_pre_save.
+        h5_path = self.ROOT.rstrip('/') + '.h5'
+        import os as _os
+        if not _os.path.isdir(self.ROOT):
+            _real_h5 = h5_path if _os.path.isfile(h5_path) else None
+            if _real_h5 is None:
+                # Try one level up (e.g. disk14tb/processed_dl3dv.h5)
+                _real_h5 = h5_path
+            try:
+                from dust3r.datasets.utils.h5_vfs import H5VFSRegistry
+                H5VFSRegistry.register(self.ROOT, _real_h5)
+            except Exception:
+                pass
+
+        cache_path = osp.join(self.ROOT, "dl3dv_metadata_cache.pkl")
+        if osp.exists(cache_path):
+            print(f"[DL3DV] Loading cached metadata from {cache_path}...")
+            import pickle
+            with open(cache_path, "rb") as f:
+                cache_data = pickle.load(f)
+            self.scenes = cache_data["scenes"]
+            self.sceneids = cache_data["sceneids"]
+            self.images = cache_data["images"]
+            self.start_img_ids = cache_data["start_img_ids"]
+            self.scene_img_list = cache_data["scene_img_list"]
+            return
+
         self.all_scenes = sorted(
             [f for f in os.listdir(self.ROOT) if os.path.isdir(osp.join(self.ROOT, f))]
         )
@@ -47,14 +76,27 @@ class DL3DV_Multi(BaseMultiViewDataset):
 
         for scene_idx, scene in enumerate(subscenes):
             scene_dir = osp.join(self.ROOT, scene, "dense")
-            rgb_paths = sorted(
-                [
-                    f
-                    for f in os.listdir(os.path.join(scene_dir, "rgb"))
-                    if f.endswith(".png")
-                ]
-            )
-            assert len(rgb_paths) > 0, f"{scene_dir} is empty."
+            rgb_dir = osp.join(scene_dir, "rgb")
+            if not osp.isdir(rgb_dir):
+                print(f"Skipping {scene}: missing dense/rgb")
+                continue
+            rgb_paths = []
+            for f in sorted(os.listdir(rgb_dir)):
+                if not f.endswith(".png"):
+                    continue
+                basename = f[:-4]
+                depth_path = osp.join(scene_dir, "depth", basename + ".npy")
+                cam_path = osp.join(scene_dir, "cam", basename + ".npz")
+                sky_path = osp.join(scene_dir, "sky_mask", f)
+                outlier_path = osp.join(scene_dir, "outlier_mask", f)
+                if all(
+                    osp.isfile(p)
+                    for p in (depth_path, cam_path, sky_path, outlier_path)
+                ):
+                    rgb_paths.append(f)
+            if len(rgb_paths) == 0:
+                print(f"Skipping {scene}: no frames with complete dense assets")
+                continue
             num_imgs = len(rgb_paths)
             cut_off = (
                 self.num_views if not self.allow_repeat else max(self.num_views // 3, 3)

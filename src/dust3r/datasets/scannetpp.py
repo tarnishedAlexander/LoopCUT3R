@@ -24,6 +24,8 @@ class ScanNetpp_Multi(BaseMultiViewDataset):
     def _load_data(self):
         with np.load(osp.join(self.ROOT, "all_metadata.npz")) as data:
             self.scenes = data["scenes"]
+        if self.scenes.dtype.kind == 'S':  # H5-extracted npz stores strings as bytes
+            self.scenes = self.scenes.astype(str)
         offset = 0
         scenes = []
         sceneids = []
@@ -40,6 +42,8 @@ class ScanNetpp_Multi(BaseMultiViewDataset):
                 osp.join(scene_dir, "new_scene_metadata.npz"), allow_pickle=True
             ) as data:
                 imgs = data["images"]
+                if imgs.dtype.kind == 'S':
+                    imgs = imgs.astype(str)
                 self.image_num += len(imgs)
                 img_ids = np.arange(len(imgs)).tolist()
                 intrins = data["intrinsics"]
@@ -59,7 +63,13 @@ class ScanNetpp_Multi(BaseMultiViewDataset):
                 ]
 
                 num_imgs = len(imgs)
-                assert max(dslr_ids) < min(iphone_ids)
+                if not dslr_ids:
+                    dslr_ids = iphone_ids
+                if not iphone_ids:
+                    iphone_ids = dslr_ids
+
+                if dslr_ids and iphone_ids and (dslr_ids != iphone_ids):
+                    assert max(dslr_ids) < min(iphone_ids)
                 assert "image_collection" in data
 
                 img_groups = []
