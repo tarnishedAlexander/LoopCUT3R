@@ -113,6 +113,12 @@ class ResizedDataset(EasyDataset):
         rng = np.random.default_rng(seed=epoch + 777)
 
         # shuffle all indices
+        if len(self.dataset) == 0:
+            raise ValueError(
+                f"Dataset has 0 samples — cannot call set_epoch.\n"
+                f"  Dataset repr: {repr(self.dataset)}\n"
+                f"  ResizedDataset new_size: {self.new_size}"
+            )
         perm = rng.permutation(len(self.dataset))
 
         # rotary extension until target size is met

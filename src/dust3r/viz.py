@@ -468,7 +468,7 @@ def get_vertical_colorbar(h, vmin, vmax, cmap_name="jet", label=None, cbar_preci
     canvas = FigureCanvasAgg(fig)
 
     ax = fig.add_subplot(111)
-    cmap = cm.get_cmap(cmap_name)
+    cmap = __import__('matplotlib').colormaps[cmap_name]
     norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
 
     tick_cnt = 6
@@ -535,9 +535,10 @@ def colorize_np(
         vmax += 1e-6
 
     x = np.clip(x, vmin, vmax)
-    x = (x - vmin) / (vmax - vmin)
+    _range = vmax - vmin
+    x = (x - vmin) / _range if _range > 0 else np.zeros_like(x)
 
-    cmap = cm.get_cmap(cmap_name)
+    cmap = __import__('matplotlib').colormaps[cmap_name]
     x_new = cmap(x)[:, :, :3]
 
     if mask is not None:

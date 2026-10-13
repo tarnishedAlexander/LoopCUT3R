@@ -58,7 +58,7 @@ class ARCroco3DStereoOutput(ModelOutput):
 
 
 
-def load_model(model_path, device, verbose=True):
+def load_model(model_path, device, verbose=True, model_cfg_str=None):
     if verbose:
         print("... loading model from", model_path)
     try:
@@ -68,20 +68,37 @@ def load_model(model_path, device, verbose=True):
     except TypeError:
         # Backward compatibility with older torch versions.
         ckpt = torch.load(model_path, map_location="cpu")
-    args = ckpt["args"].model.replace(
+
+    # Training checkpoints: {"args": cfg, "model": state_dict, "epoch": N}
+    # Older / inference-only checkpoints: raw OrderedDict (state dict directly)
+    if isinstance(ckpt, dict) and "args" in ckpt:
+        args_str = ckpt["args"].model
+        state_dict = ckpt["model"]
+    else:
+        # Raw state dict — caller must supply model_cfg_str
+        if model_cfg_str is None:
+            raise ValueError(
+                f"Checkpoint at {model_path} is a raw state dict without embedded args. "
+                "Pass --model_cfg (demo.py) or model_cfg_str= (load_model) with the "
+                "model config string from your training YAML."
+            )
+        args_str = model_cfg_str
+        state_dict = ckpt
+
+    args_str = args_str.replace(
         "ManyAR_PatchEmbed", "PatchEmbedDust3R"
     )  # ManyAR only for aspect ratio not consistent
-    if "landscape_only" not in args:
-        args = args[:-2] + ", landscape_only=False))"
+    if "landscape_only" not in args_str:
+        args_str = args_str[:-2] + ", landscape_only=False))"
     else:
-        args = args.replace(" ", "").replace(
+        args_str = args_str.replace(" ", "").replace(
             "landscape_only=True", "landscape_only=False"
         )
-    assert "landscape_only=False" in args
+    assert "landscape_only=False" in args_str
     if verbose:
-        print(f"instantiating : {args}")
+        print(f"instantiating : {args_str}")
     net = safe_eval_expr(
-        args,
+        args_str,
         {
             "ARCroco3DStereo": ARCroco3DStereo,
             "ARCroco3DStereoConfig": ARCroco3DStereoConfig,
@@ -89,7 +106,7 @@ def load_model(model_path, device, verbose=True):
         },
         context="model",
     )
-    s = net.load_state_dict(ckpt["model"], strict=False)
+    s = net.load_state_dict(state_dict, strict=False)
     if verbose:
         print(s)
     return net.to(device)
@@ -412,9 +429,9 @@ class ARCroco3DStereo(CroCoNet):
         self.tbptl_grad_steps = getattr(config, "tbptl_grad_steps", None)
 
     @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, **kw):
+    def from_pretrained(cls, pretrained_model_name_or_path, model_cfg_str=None, **kw):
         if os.path.isfile(pretrained_model_name_or_path):
-            return load_model(pretrained_model_name_or_path, device="cpu")
+            return load_model(pretrained_model_name_or_path, device="cpu", model_cfg_str=model_cfg_str)
         else:
             try:
                 model = super(ARCroco3DStereo, cls).from_pretrained(

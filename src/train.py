@@ -23,6 +23,7 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
 torch.backends.cuda.matmul.allow_tf32 = True  # for gpu >= Ampere and pytorch >= 1.12
+torch.backends.cudnn.allow_tf32 = True         # TF32 for conv ops (patch embed, DPT head)
 
 from dust3r.model import (
     PreTrainedModel,
@@ -246,31 +247,25 @@ def setup_for_distributed(accelerator: Accelerator):
 def save_current_code(outdir):
     now = datetime.datetime.now()  # current date and time
     date_time = now.strftime("%m_%d-%H:%M:%S")
-    src_dir = "."
     dst_dir = os.path.join(outdir, "code", "{}".format(date_time))
-    shutil.copytree(
-        src_dir,
-        dst_dir,
-        symlinks=True,
-        ignore=shutil.ignore_patterns(
-            ".vscode*",
-            "assets*",
-            "example*",
-            "checkpoints*",
-            "OLD*",
-            "logs*",
-            "out*",
-            "runs*",
-            "*.png",
-            "*.mp4",
-            "*__pycache__*",
-            "*.git*",
-            "*.idea*",
-            "*.zip",
-            "*.jpg",
-        ),
-        dirs_exist_ok=True,
-    )
+    os.makedirs(dst_dir, exist_ok=True)
+
+    # Only copy specific subdirectories and root-level code files
+    # to avoid pulling in huge datasets or non-code folders.
+    dirs_to_copy = ["src", "config"]
+    extensions_to_copy = (".py", ".yaml", ".yml", ".sh")
+
+    for item in os.listdir("."):
+        src_item = os.path.join(".", item)
+        dst_item = os.path.join(dst_dir, item)
+
+        if os.path.isdir(src_item):
+            if item in dirs_to_copy:
+                shutil.copytree(src_item, dst_item, symlinks=True, ignore=shutil.ignore_patterns("*__pycache__*", "checkpoints*", "checkpoints_smoke*"), dirs_exist_ok=True)
+        elif os.path.isfile(src_item):
+            if src_item.endswith(extensions_to_copy):
+                shutil.copy(src_item, dst_item)
+
     return dst_dir
 
 
@@ -314,7 +309,7 @@ def train(args):
         (Path(args.output_dir) / "checkpoints").mkdir(parents=True, exist_ok=True)
         (Path(args.output_dir) / "events").mkdir(parents=True, exist_ok=True)
 
-    if accelerator.is_main_process:
+    if accelerator.is_main_process and getattr(args, "save_code", True):
         dst_dir = save_current_code(outdir=args.output_dir)
         printer.info(f"Saving current code to {dst_dir}")
 
@@ -483,6 +478,10 @@ def train(args):
 
     if args.pretrained and not args.resume:
         printer.info(f"Loading pretrained: {args.pretrained}")
+        import sys
+        raptor_path = '/app/recurrentTransformer/raptor1/src'
+        if raptor_path not in sys.path:
+            sys.path.append(raptor_path)
         try:
             ckpt = torch.load(
                 args.pretrained, map_location=device, weights_only=False
@@ -490,10 +489,16 @@ def train(args):
         except TypeError:
             ckpt = torch.load(args.pretrained, map_location=device)
         load_only_encoder = getattr(args, "load_only_encoder", False)
+        model_weights = ckpt.get("model", ckpt) if isinstance(ckpt, dict) else ckpt
+        if hasattr(model_weights, "state_dict"):
+            state_dict = model_weights.state_dict()
+        else:
+            state_dict = model_weights
+
         if load_only_encoder:
             filtered_state_dict = {
                 k: v
-                for k, v in ckpt["model"].items()
+                for k, v in state_dict.items()
                 if "enc_blocks" in k or "patch_embed" in k
             }
             printer.info(
@@ -501,7 +506,7 @@ def train(args):
             )
         else:
             printer.info(
-                model.load_state_dict(strip_module(ckpt["model"]), strict=False)
+                model.load_state_dict(strip_module(state_dict), strict=False)
             )
         del ckpt  # in case it occupies memory
 
@@ -547,6 +552,9 @@ def train(args):
                 f.write(json.dumps(log_stats) + "\n")
 
     def save_model(epoch, fname, best_so_far):
+        if not getattr(args, "save_checkpoint", True):
+            printer.info(f"Skipping save_model '{fname}' as save_checkpoint=False")
+            return
         misc.save_model(
             accelerator=accelerator,
             args=args,
@@ -653,6 +661,9 @@ def train(args):
 
 
 def save_final_model(accelerator, args, epoch, model_without_ddp, best_so_far=None):
+    if not getattr(args, "save_checkpoint", True):
+        printer.info("Skipping save_final_model as save_checkpoint=False")
+        return
     output_dir = Path(args.output_dir) / "checkpoints"
     checkpoint_path = output_dir / "checkpoint-final.pth"
     to_save = {
@@ -699,6 +710,17 @@ def train_one_epoch(
 ):
     assert torch.backends.cuda.matmul.allow_tf32 == True
 
+    # Log startup RSS before any training steps
+    try:
+        with open('/proc/self/status') as _f:
+            for _line in _f:
+                if _line.startswith('VmRSS:'):
+                    _rss = int(_line.split()[1]) / 1048576
+                    printer.info(f"[MemStart] RSS at epoch {epoch} start: {_rss:.2f} GB")
+                    break
+    except Exception:
+        pass
+
     model.train(True)
     metric_logger = misc.MetricLogger(delimiter="  ")
     metric_logger.add_meter("lr", misc.SmoothedValue(window_size=1, fmt="{value:.6f}"))
@@ -706,6 +728,9 @@ def train_one_epoch(
     accum_iter = args.accum_iter
 
     def save_model(epoch, fname, best_so_far):
+        if not getattr(args, "save_checkpoint", True):
+            printer.info(f"Skipping save_model '{fname}' as save_checkpoint=False")
+            return
         misc.save_model(
             accelerator=accelerator,
             args=args,
@@ -775,9 +800,10 @@ def train_one_epoch(
 
             if not math.isfinite(loss_value):
                 print(
-                    f"Loss is {loss_value}, stopping training, loss details: {loss_details}"
+                    f"[WARNING] Loss is {loss_value}, skipping this batch to prevent weight corruption! Loss details: {loss_details}"
                 )
-                sys.exit(1)
+                optimizer.zero_grad()
+                continue
             if not result.get("already_backprop", False):
                 should_step = accelerator.sync_gradients
                 loss_scaler(
@@ -785,7 +811,7 @@ def train_one_epoch(
                     optimizer,
                     parameters=model.parameters(),
                     update_grad=should_step,
-                    clip_grad=1.0,
+                    clip_grad=getattr(args, 'clip_grad', 1.0),
                 )
                 if should_step:
                     optimizer.zero_grad()
@@ -794,20 +820,21 @@ def train_one_epoch(
             curr_num_view = len(batch)
 
             del loss
-            tb_vis_img = (data_iter_step + 1) % accum_iter == 0 and (
-                (step + 1) % (args.print_img_freq)
-            ) == 0
+            tb_vis_img = False  # visualization disabled during training to save RAM
             if not tb_vis_img:
                 del batch
-            else:
-                torch.cuda.empty_cache()
 
             lr = optimizer.param_groups[0]["lr"]
             metric_logger.update(epoch=epoch_f)
             metric_logger.update(lr=lr)
             metric_logger.update(step=step)
 
-            metric_logger.update(loss=loss_value, **loss_details)
+            # Only pass scalar values to metric_logger — tensor-valued keys (valid_mask_N,
+            # gt_imgN, self_conf_N, etc.) are for visualization only and must not be logged.
+            scalar_details = {k: v for k, v in loss_details.items()
+                              if isinstance(v, (int, float)) or
+                              (hasattr(v, 'ndim') and v.ndim == 0)}
+            metric_logger.update(loss=loss_value, **scalar_details)
 
             if (data_iter_step + 1) % accum_iter == 0 and (
                 (data_iter_step + 1) % (accum_iter * args.print_freq)
@@ -864,7 +891,38 @@ def train_one_epoch(
                     log_writer.add_images(
                         "train" + "/" + name, imgs_stacked, step, dataformats="HWC"
                     )
-                del batch
+                del imgs_stacked_dict, loss_details, batch
+                torch.cuda.empty_cache()
+
+        # Periodic memory cleanup: clear H5VFS lookup caches + Python GC
+        if data_iter_step % 50 == 0:
+            try:
+                from dust3r.datasets.utils.h5_vfs import H5VFSRegistry
+                n_exists = len(H5VFSRegistry._exists_cache)
+                H5VFSRegistry._exists_cache.clear()
+                H5VFSRegistry._isfile_cache.clear()
+                H5VFSRegistry._isdir_cache.clear()
+                H5VFSRegistry._listdir_cache.clear()
+            except Exception:
+                n_exists = -1
+            import gc; gc.collect()
+            try:
+                import ctypes; ctypes.CDLL('libc.so.6').malloc_trim(0)
+            except Exception:
+                pass
+            # Log RSS + Swap so we can track memory growth
+            try:
+                rss_gb = 0.0
+                swap_gb = 0.0
+                with open('/proc/self/status') as _f:
+                    for _line in _f:
+                        if _line.startswith('VmRSS:'):
+                            rss_gb = int(_line.split()[1]) / 1048576
+                        elif _line.startswith('VmSwap:'):
+                            swap_gb = int(_line.split()[1]) / 1048576
+                printer.info(f"[MemClean] step={data_iter_step}  H5VFS cleared ({n_exists})  RSS={rss_gb:.2f} GB  Swap={swap_gb:.2f} GB")
+            except Exception:
+                pass
 
         if (
             data_iter_step % int(args.save_freq * len(data_loader)) == 0
@@ -932,7 +990,10 @@ def test_one_epoch(
             )
 
         loss_value, loss_details = result["loss"]  # criterion returns two values
-        metric_logger.update(loss=float(loss_value), **loss_details)
+        scalar_details = {k: v for k, v in loss_details.items()
+                          if isinstance(v, (int, float)) or
+                          (hasattr(v, 'ndim') and v.ndim == 0)}
+        metric_logger.update(loss=float(loss_value), **scalar_details)
 
     printer.info("Averaged stats: %s", metric_logger)
 

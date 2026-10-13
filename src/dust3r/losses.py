@@ -15,7 +15,10 @@ from dust3r.utils.geometry import (
     get_group_pointcloud_center_scale,
     weighted_procrustes,
 )
-from gsplat import rasterization
+try:
+    from gsplat import rasterization
+except ImportError:
+    rasterization = None
 import numpy as np
 import lpips
 from dust3r.utils.camera import (
@@ -1095,7 +1098,7 @@ class Regr3DPose(Criterion, MultiLoss):
 
         details = {}
         for i in range(len(ls_self)):
-            details[self_name + f"_self_pts3d/{i+1}"] = float(ls_self[i].mean())
+            details[self_name + f"_self_pts3d/{i+1}"] = float(ls_self[i].mean() if ls_self[i].numel() > 0 else 0)
             details[f"gt_img{i+1}"] = gts[i]["img"].permute(0, 2, 3, 1).detach()
             details[f"self_conf_{i+1}"] = preds[i]["conf_self"].detach()
             details[f"valid_mask_{i+1}"] = masks[i].detach()
@@ -1260,7 +1263,7 @@ class Regr3DPoseBatchList(Regr3DPose):
 
         details = {}
         for i in range(len(ls_self)):
-            details[self_name + f"_self_pts3d/{i+1}"] = float(ls_self[i].mean())
+            details[self_name + f"_self_pts3d/{i+1}"] = float(ls_self[i].mean() if ls_self[i].numel() > 0 else 0)
             details[f"self_conf_{i+1}"] = preds[i]["conf_self"].detach()
             details[f"gt_img{i+1}"] = gts[i]["img"].permute(0, 2, 3, 1).detach()
             details[f"valid_mask_{i+1}"] = masks[i].detach()
@@ -1284,35 +1287,38 @@ class Regr3DPoseBatchList(Regr3DPose):
             )
             masks_cross_b = torch.unbind(torch.stack(masks, dim=1)[~camera_only], dim=0)
             ls_cross_b = []
-            for i in range(len(gt_pts_cross_b)):
-                if depth_only[~camera_only][i]:
-                    ls_cross_b.append(
-                        self.depth_only_criterion(
-                            pred_pts_cross_b[i][..., -1],
-                            gt_pts_cross_b[i][..., -1],
-                            masks_cross_b[i],
+            masks_cross = [mask[~camera_only] for mask in masks]
+            if len(masks_cross_b) == 0:
+                ls_cross = []
+            else:
+                for i in range(len(gt_pts_cross_b)):
+                    if depth_only[~camera_only][i]:
+                        ls_cross_b.append(
+                            self.depth_only_criterion(
+                                pred_pts_cross_b[i][..., -1],
+                                gt_pts_cross_b[i][..., -1],
+                                masks_cross_b[i],
+                            )
                         )
-                    )
-                elif single_view[~camera_only][i] and not is_metric[~camera_only][i]:
-                    ls_cross_b.append(
-                        self.single_view_criterion(
-                            pred_pts_cross_b[i], gt_pts_cross_b[i], masks_cross_b[i]
+                    elif single_view[~camera_only][i] and not is_metric[~camera_only][i]:
+                        ls_cross_b.append(
+                            self.single_view_criterion(
+                                pred_pts_cross_b[i], gt_pts_cross_b[i], masks_cross_b[i]
+                            )
                         )
-                    )
-                else:
-                    ls_cross_b.append(
-                        self.criterion(
-                            pred_pts_cross_b[i][masks_cross_b[i]],
-                            gt_pts_cross_b[i][masks_cross_b[i]],
+                    else:
+                        ls_cross_b.append(
+                            self.criterion(
+                                pred_pts_cross_b[i][masks_cross_b[i]],
+                                gt_pts_cross_b[i][masks_cross_b[i]],
+                            )
                         )
-                    )
-            ls_cross = self.reorg(ls_cross_b, masks_cross_b)
+                ls_cross = self.reorg(ls_cross_b, masks_cross_b)
 
         if self.sky_loss_value > 0:
             assert (
                 self.criterion.reduction == "none"
             ), "sky_loss_value should be 0 if no conf loss"
-            masks_cross = [mask[~camera_only] for mask in masks]
             skys_cross = [sky[~camera_only] for sky in skys]
             for i, l in enumerate(ls_cross):
                 ls_cross[i] = torch.where(

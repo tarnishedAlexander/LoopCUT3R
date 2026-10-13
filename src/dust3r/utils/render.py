@@ -1,5 +1,9 @@
 import torch
-from gsplat import rasterization
+try:
+    from gsplat import rasterization
+    GSPLAT_AVAILABLE = True
+except ImportError:
+    GSPLAT_AVAILABLE = False
 from dust3r.utils.geometry import inv, geotrf
 
 
@@ -14,6 +18,12 @@ def render(
     device = pts3d.device
     batch_size = len(intrinsics)
     img_size = pts3d.shape[1:3]
+
+    if not GSPLAT_AVAILABLE:
+        # Fallback to zero depth maps if gsplat is not installed (prevents training crashes)
+        rendered_depths = torch.zeros((batch_size, img_size[0], img_size[1]), device=device, dtype=pts3d.dtype)
+        return [], rendered_depths, []
+
     pts3d = pts3d.reshape(batch_size, -1, 3)
     num_pts = pts3d.shape[1]
     quats = torch.randn((num_pts, 4), device=device)

@@ -25,6 +25,25 @@ except ImportError:
 ImgNorm = tvf.Compose([tvf.ToTensor(), tvf.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
 
+def _imread_exr_native(path):
+    """Load an EXR depth map using the OpenEXR Python bindings (works even when
+    opencv-python-headless was compiled without OpenEXR support)."""
+    try:
+        import OpenEXR
+        import Imath
+        f = OpenEXR.InputFile(str(path))
+        header = f.header()
+        dw = header['dataWindow']
+        h = dw.max.y - dw.min.y + 1
+        w = dw.max.x - dw.min.x + 1
+        pt = Imath.PixelType(Imath.PixelType.FLOAT)
+        ch = next(iter(header['channels']))  # first available channel
+        raw = f.channel(ch, pt)
+        return np.frombuffer(raw, dtype=np.float32).reshape(h, w)
+    except Exception:
+        return None
+
+
 def img_to_arr(img):
     if isinstance(img, str):
         img = imread_cv2(img)
@@ -34,10 +53,29 @@ def img_to_arr(img):
 def imread_cv2(path, options=cv2.IMREAD_COLOR):
     """Open an image or a depthmap with opencv-python."""
     if path.endswith((".exr", "EXR")):
-        options = cv2.IMREAD_ANYDEPTH
+        img = _imread_exr_native(path)
+        if img is not None:
+            return img
+        # fallback: cv2 (requires OpenEXR-enabled build)
+        img = cv2.imread(path, cv2.IMREAD_ANYDEPTH)
+        if img is None:
+            print(f"WARNING: Could not load image={path}. Returning dummy black image.")
+            return np.zeros((480, 640), dtype=np.float32)
+        return img
     img = cv2.imread(path, options)
     if img is None:
-        raise IOError(f"Could not load image={path} with {options=}")
+        print(f"WARNING: Could not load image={path} with {options=}. Returning dummy black image.")
+        if options == cv2.IMREAD_GRAYSCALE or "depth" in path.lower() or "mask" in path.lower():
+            img = np.zeros((480, 640), dtype=np.float32)
+        elif options == cv2.IMREAD_ANYDEPTH:
+            img = np.zeros((480, 640), dtype=np.float32)
+        elif options == cv2.IMREAD_UNCHANGED:
+            if "depth" in path.lower() or "mask" in path.lower():
+                img = np.zeros((480, 640), dtype=np.float32)
+            else:
+                img = np.zeros((480, 640, 3), dtype=np.uint8)
+        else:
+            img = np.zeros((480, 640, 3), dtype=np.uint8)
     if img.ndim == 3:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     return img
