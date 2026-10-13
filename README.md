@@ -85,18 +85,3 @@ Our code is based on the following awesome repositories:
 
 We thank the authors for releasing their code!
 
-
-
-## Citation
-
-If you find our work useful, please cite:
-
-```bibtex
-@article{wang2025continuous,
-  title={Continuous 3D Perception Model with Persistent State},
-  author={Wang, Qianqian and Zhang, Yifei and Holynski, Aleksander and Efros, Alexei A and Kanazawa, Angjoo},
-  journal={arXiv preprint arXiv:2501.12387},
-  year={2025}
-}
-```
-
