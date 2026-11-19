@@ -40,6 +40,7 @@ On a 6 GB GPU (RTX 2060, 512x288):
 | Peak VRAM, online, 300 frames | 3.24 GB | 1.60 GB | -50.5 % |
 | Peak VRAM, stream, 90 frames | 4.79 GB | 3.15 GB | -34.2 % |
 | Stream, 300 frames | out of memory | out of memory | |
+| Speed, stream, 13 frames | 3.7 FPS | 4.6 FPS | +24 % |
 | Speed, online, 300 frames | 3.4 FPS | 4.2 FPS | +22 % |
 | Speed, 224x224, batch, 13 frames | 6.7 FPS | 10.4 FPS | +54 % |
 
