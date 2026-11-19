@@ -1,0 +1,36 @@
+# Smoke test: tiny subsample from all 15 stage1 datasets, 2 epochs.
+# Resume +1 epoch: python src/train.py --config-name recurrent_stage1_smoke epochs=3
+
+defaults:
+  - recurrent_stage1
+
+pretrained: ${oc.env:CUT3R_RECURRENT_STAGE1_PRETRAINED,/app/recurrentTransformer/raptor1/src/phase3_models/raptor_latest.pt}
+load_only_encoder: True
+resume: null
+auto_resume: True
+
+wildrgbd_root: ${oc.env:WILDRGBD_ROOT,/app/recurrentTransformer/dataset/disk12tb/preprocess_wildrgbd}
+hypersim_root: ${oc.env:HYPERSIM_ROOT,/app/recurrentTransformer/dataset/disk12tb/processed_hypersim}
+
+# 4 sequences per dataset (52 train samples/epoch total, excluding ScanNet & DL3DV)
+train_dataset: 4 @ ${dataset1} + 4 @ ${dataset2} + 4 @ ${dataset3} + 4 @ ${dataset4} + 4 @ ${dataset6} + 4 @ ${dataset7} + 4 @ ${dataset8} + 4 @ ${dataset9} + 4 @ ${dataset10} + 4 @ ${dataset11} + 4 @ ${dataset12} + 4 @ ${dataset13} + 4 @ ${dataset14}
+
+test_dataset: 8 @ ARKitScenes_Multi(split='train', ROOT='${arkit_root}', resolution=224, num_views=${num_test_views}, seed=42, n_corres=${n_corres_test})
+
+batch_size: 2
+accum_iter: 2
+gradient_checkpointing: True
+epochs: 2
+warmup_epochs: 0.2
+num_workers: 2
+print_freq: 5
+eval_freq: 1
+save_freq: 1
+keep_freq: 1
+print_img_freq: 500000
+
+exp_name: 'recurrent_stage1_smoke'
+output_dir: ./checkpoints/${exp_name}/
+save_code: False
+save_checkpoint: True
+

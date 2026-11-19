@@ -1,0 +1,81 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+
+# C extensions
+*.so
+
+# Distribution / packaging
+bin/
+build/
+develop-eggs/
+dist/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+.tox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+
+# Translations
+*.mo
+
+# Mr Developer
+.mr.developer.cfg
+.project
+.pydevproject
+
+# Rope
+.ropeproject
+
+# Django stuff:
+*.log
+*.pot
+
+# Sphinx documentation
+docs/_build/
+
+# Ignore data and ckpts
+*.pth
+data
+src/checkpoints
+
+demo_tmp*
+eval_results
+src/checkpoints*
+*.pth
+checkpoints*
+# Hydra code snapshots written by save_current_code() in train.py
+code/
+# atomic-write temp files (e.g. config/foo.yaml.tmp.1234.abcdef)
+*.tmp.*
+# generated figures; keep upstream demo/doc images
+*.png
+!assets/*.png
+!examples/**/*.png
+!docs/**/*.png
+
+# sample demo inputs (118 MB of frames)
+demo_data/
+
+# demo.py writes its reconstruction next to the input frames
+# (examples/<seq>/{camera,color,conf,depth}); the frames themselves stay tracked
+examples/*/camera/
+examples/*/color/
+examples/*/conf/
+examples/*/depth/
+.scratch/
