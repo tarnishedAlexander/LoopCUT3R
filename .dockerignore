@@ -1,0 +1,8 @@
+# The image only needs the requirements and the RoPE kernel sources; the
+# repository itself is mounted at run time (see docker/docker-compose.yml).
+*
+!requirements.txt
+!src/croco/models/curope/
+src/croco/models/curope/build/
+src/croco/models/curope/*.so
+src/croco/models/curope/__pycache__/

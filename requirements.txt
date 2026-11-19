@@ -6,6 +6,7 @@ gradio
 matplotlib
 tqdm
 opencv-python
+imageio
 scipy
 einops
 trimesh

@@ -1,12 +1,18 @@
 # Copyright (C) 2022-present Naver Corporation. All rights reserved.
 # Licensed under CC BY-NC-SA 4.0 (non-commercial use only).
 
+import os
+
 from setuptools import setup
 from torch import cuda
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
-# compile for all possible CUDA architectures
-all_cuda_archs = cuda.get_gencode_flags().replace("compute=", "arch=").split()
+# Compile for the architectures in TORCH_CUDA_ARCH_LIST when it is set (read by
+# CUDAExtension itself), otherwise for every architecture this PyTorch supports.
+if os.environ.get("TORCH_CUDA_ARCH_LIST"):
+    all_cuda_archs = []
+else:
+    all_cuda_archs = cuda.get_gencode_flags().replace("compute=", "arch=").split()
 # alternatively, you can list cuda archs that you want, eg:
 # all_cuda_archs = [
 # '-gencode', 'arch=compute_70,code=sm_70',

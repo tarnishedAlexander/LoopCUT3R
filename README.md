@@ -87,6 +87,25 @@ Optionally compile the CUDA kernels for RoPE (as in CroCo v2):
 cd src/croco/models/curope/ && python setup.py build_ext --inplace && cd -
 ```
 
+### Docker
+
+`docker/` builds an image with PyTorch 2.7.1 (CUDA 12.8), the evaluation
+dependencies and the RoPE kernel compiled for RTX 20xx to RTX 50xx (sm_75 to
+sm_120).  It needs an NVIDIA driver >= 570 and the NVIDIA Container Toolkit;
+the repository is mounted, not copied.
+
+```bash
+docker compose -f docker/docker-compose.yml build
+docker compose -f docker/docker-compose.yml run --rm loopcut3r \
+    python docker/selftest.py --model_path checkpoints/loopcut3r_512_dpt.pth
+```
+
+`selftest.py` checks that PyTorch has kernels for the GPU, that the compiled
+RoPE kernel loads and matches the PyTorch implementation, and that the
+checkpoint loads and runs.  For older drivers, build with
+`--build-arg CUDA_VERSION=12.6.3 --build-arg TORCH_CUDA=cu126
+--build-arg TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0+PTX"` (no RTX 50xx).
+
 ## Checkpoints
 
 | Model | Training resolutions | Head | Size |

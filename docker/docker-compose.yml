@@ -1,0 +1,32 @@
+# Run from the repository root:
+#   docker compose -f docker/docker-compose.yml build
+#   docker compose -f docker/docker-compose.yml run --rm loopcut3r python docker/selftest.py
+#   docker compose -f docker/docker-compose.yml run --rm --service-ports loopcut3r \
+#       python demo.py --model_path checkpoints/loopcut3r_512_dpt.pth --seq_path examples/001 --port 8080
+#
+# The repository is mounted, not copied: checkpoints/, data/ and eval_results/
+# live on the host.  LOOPCUT3R_DATA can point the training/eval data elsewhere.
+services:
+  loopcut3r:
+    image: loopcut3r:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    volumes:
+      - ..:/workspace/LoopCUT3R
+      - ${LOOPCUT3R_DATA:-../data}:/workspace/LoopCUT3R/data
+    ports:
+      - "8080:8080"   # viser viewer of demo.py
+    ipc: host
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
