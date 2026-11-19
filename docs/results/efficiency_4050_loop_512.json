@@ -1,0 +1,102 @@
+{
+ "label": "loop",
+ "repo": "/workspace/LoopCUT3R",
+ "model_path": "/workspace/LoopCUT3R/checkpoints/loopcut3r_512_dpt.pth",
+ "hw": [
+  288,
+  512
+ ],
+ "params_total": 358638546,
+ "params": {
+  "mask_token": 768,
+  "pose_token": 768,
+  "masked_img_token": 1024,
+  "masked_ray_map_token": 1024,
+  "patch_embed": 787456,
+  "patch_embed_ray_map": 1573888,
+  "enc_blocks": 37794816,
+  "enc_norm": 2048,
+  "decoder_embed": 787200,
+  "dec_blocks": 28359936,
+  "dec_norm": 1536,
+  "enc_blocks_ray_map": 25196544,
+  "enc_norm_ray_map": 2048,
+  "pose_retriever": 152305152,
+  "register_tokens": 786432,
+  "decoder_embed_state": 787200,
+  "dec_blocks_state": 28359936,
+  "dec_norm_state": 1536,
+  "downstream_head": 81889234
+ },
+ "distinct_blocks": {
+  "enc_blocks": 3,
+  "enc_blocks_ray_map": 2,
+  "dec_blocks": 3,
+  "dec_blocks_state": 3
+ },
+ "block_applications_per_frame": {
+  "enc_blocks": 24.0,
+  "enc_blocks_ray_map": 0.0,
+  "dec_blocks": 4.0,
+  "dec_blocks_state": 4.0
+ },
+ "weights_gb": 1.379,
+ "rope": "cuda",
+ "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU",
+ "runs": [
+  {
+   "mode": "batch",
+   "frames": 13,
+   "peak_gb": 2.029,
+   "fps": 6.13
+  },
+  {
+   "mode": "batch",
+   "frames": 90,
+   "peak_gb": null,
+   "fps": null
+  },
+  {
+   "mode": "batch",
+   "frames": 300,
+   "peak_gb": null,
+   "fps": null
+  },
+  {
+   "mode": "stream",
+   "frames": 13,
+   "peak_gb": 1.861,
+   "fps": 6.57
+  },
+  {
+   "mode": "stream",
+   "frames": 90,
+   "peak_gb": 3.085,
+   "fps": 6.48
+  },
+  {
+   "mode": "stream",
+   "frames": 300,
+   "peak_gb": null,
+   "fps": null
+  },
+  {
+   "mode": "online",
+   "frames": 13,
+   "peak_gb": 1.602,
+   "fps": 5.7
+  },
+  {
+   "mode": "online",
+   "frames": 90,
+   "peak_gb": 1.602,
+   "fps": 5.68
+  },
+  {
+   "mode": "online",
+   "frames": 300,
+   "peak_gb": 1.602,
+   "fps": 5.67
+  }
+ ]
+}

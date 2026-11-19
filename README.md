@@ -33,18 +33,21 @@ every frame's predictions on the GPU, so its memory grows with the sequence.
 *Online* keeps only the current frame and the recurrent state on the GPU, as a
 live application would, and its memory does not grow.
 
-On a 6 GB GPU (RTX 2060, 512x288):
+On 6 GB GPUs (RTX 2060 desktop and RTX 4050 laptop, 512x288):
 
-| | CUT3R | LoopCUT3R | change |
-|---|---:|---:|---:|
-| Peak VRAM, online, 300 frames | 3.24 GB | 1.60 GB | -50.5 % |
-| Peak VRAM, stream, 90 frames | 4.79 GB | 3.15 GB | -34.2 % |
-| Stream, 300 frames | out of memory | out of memory | |
-| Speed, stream, 13 frames | 3.7 FPS | 4.6 FPS | +24 % |
-| Speed, online, 300 frames | 3.4 FPS | 4.2 FPS | +22 % |
-| Speed, 224x224, batch, 13 frames | 6.7 FPS | 10.4 FPS | +54 % |
+| | 2060 CUT3R | 2060 LoopCUT3R | change | 4050 CUT3R | 4050 LoopCUT3R | change |
+|---|---:|---:|---:|---:|---:|---:|
+| Peak VRAM, online, 300 frames | 3.24 GB | 1.60 GB | -50.5 % | 3.24 GB | 1.60 GB | -50.5 % |
+| Peak VRAM, stream, 90 frames | 4.79 GB | 3.15 GB | -34.2 % | 4.72 GB | 3.09 GB | -34.6 % |
+| Stream, 300 frames | out of memory | out of memory | | out of memory | out of memory | |
+| Speed, stream, 13 frames | 3.7 FPS | 4.6 FPS | +24 % | 5.0 FPS | 6.6 FPS | +30 % |
+| Speed, online, 90 frames | 3.4 FPS | 4.2 FPS | +25 % | 4.5 FPS | 5.7 FPS | +26 % |
+| Speed, 224x224, batch, 13 frames | 6.7 FPS | 10.4 FPS | +54 % | 10.5 FPS | 15.0 FPS | +42 % |
 
-Both models run in 6 GB in online mode; neither is real-time on this GPU.
+Both models run in 6 GB in online mode; neither is real-time at 512x288 on
+these GPUs.  The 4050 runs used the Docker image of `docker/`.  On the 4050,
+CUT3R's online run fell to 2.5 FPS at 300 frames (4.5 FPS at 90, same memory),
+probably thermal throttling of the laptop; LoopCUT3R held 5.7 FPS.
 The pose memory
 (152.31 M) and the prediction heads (81.89 M) are unchanged and make up 65 % of
 LoopCUT3R's parameters.

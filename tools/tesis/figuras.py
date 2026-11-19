@@ -203,4 +203,4 @@ def barrido():
 
 
 if __name__ == "__main__":
-    curvas(); por_escena(); eficiencia("5090"); eficiencia("2060"); progresion(); sonda(); barrido()
+    curvas(); por_escena(); eficiencia("5090"); eficiencia("2060"); eficiencia("4050"); progresion(); sonda(); barrido()
