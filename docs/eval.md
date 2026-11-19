@@ -25,7 +25,7 @@ multi-view reconstruction launchers inherited from CUT3R.)
 | Video depth (`eval/video_depth`) | Sintel (23 seq.), Bonn (5) | 512, scale & shift alignment |
 
 ```bash
-bash tools/eval/run_benchmarks.sh LoopCUT3R MODEL_PATH
+bash tools/eval/run_benchmarks.sh LoopCUT3R checkpoints/loopcut3r_512_dpt.pth
 bash tools/eval/run_benchmarks.sh CUT3R CUT3R_MODEL_PATH /path/to/CUT3R
 python tools/eval/pose_table.py --out docs/results/pose_by_scene.json CUT3R LoopCUT3R
 ```
@@ -35,8 +35,9 @@ and prints the depth metrics; `pose_table.py` averages the pose metrics over the
 scenes every label scored, cutting each scene to the same number of frames for
 all labels.
 
-Use a training checkpoint (`checkpoint-last.pth`): the launchers rebuild the
-model from the model string stored in it.
+The launchers rebuild the model from the configuration stored in the
+checkpoint: use the released `loopcut3r_512_dpt.pth` or a training checkpoint
+(`checkpoint-last.pth`), not a weights-only file such as `checkpoint-final.pth`.
 
 ### Run each model from its own source tree
 
@@ -54,7 +55,7 @@ python tools/eval/check_weights.py /path/to/CUT3R CUT3R_MODEL_PATH   # want MISS
 ## Memory and speed
 
 ```bash
-python tools/eval/efficiency.py --repo . --label loopcut3r --model_path MODEL_PATH \
+python tools/eval/efficiency.py --repo . --label loopcut3r --model_path checkpoints/loopcut3r_512_dpt.pth \
     --img_dir examples/001 --frames 13 90 300 --out efficiency_loop.json
 ```
 

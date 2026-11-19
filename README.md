@@ -70,14 +70,27 @@ cd src/croco/models/curope/ && python setup.py build_ext --inplace && cd -
 
 ## Checkpoints
 
-The trained LoopCUT3R checkpoint is not public yet; the link will be added
-here when it is released.  CUT3R's checkpoints are available from the
+| Model | Training resolutions | Head | Size |
+|---|---|---|---|
+| [`loopcut3r_512_dpt.pth`](https://drive.google.com/file/d/1ZShDKb_0NKOPSMvboJFOc5CqCFJkODkj/view?usp=sharing) | 512x384 ... 256x512 (10 aspect ratios) | DPT | 1.43 GB |
+
+This is the phase 3 model whose results are reported below.  The file holds the
+weights and the model configuration, so it loads with `--model_path` alone.
+
+```bash
+mkdir -p checkpoints
+gdown --fuzzy https://drive.google.com/file/d/1ZShDKb_0NKOPSMvboJFOc5CqCFJkODkj/view -O checkpoints/loopcut3r_512_dpt.pth
+sha256sum checkpoints/loopcut3r_512_dpt.pth
+# 6983bfa849224dfa2e672b6e71a288d348950e4a0226d8adade944c1015b62e9
+```
+
+CUT3R's checkpoints are available from the
 [CUT3R repository](https://github.com/CUT3R/CUT3R).
 
 ## Inference
 
 ```bash
-python demo.py --model_path MODEL_PATH --seq_path examples/001 --size 512 \
+python demo.py --model_path checkpoints/loopcut3r_512_dpt.pth --seq_path examples/001 --size 512 \
     --vis_threshold 1.5 --output_dir tmp
 ```
 
@@ -133,14 +146,14 @@ See [`docs/train.md`](docs/train.md) for details.
 
 ```bash
 # a checkpoint must be run by the source tree that built it
-python tools/eval/check_weights.py . MODEL_PATH
+python tools/eval/check_weights.py . checkpoints/loopcut3r_512_dpt.pth
 
-bash tools/eval/run_benchmarks.sh LoopCUT3R MODEL_PATH
+bash tools/eval/run_benchmarks.sh LoopCUT3R checkpoints/loopcut3r_512_dpt.pth
 bash tools/eval/run_benchmarks.sh CUT3R CUT3R_MODEL_PATH /path/to/CUT3R
 python tools/eval/pose_table.py CUT3R LoopCUT3R
 
 python tools/eval/efficiency.py --repo . --label loopcut3r \
-    --model_path MODEL_PATH --img_dir examples/001 --frames 13 90 300
+    --model_path checkpoints/loopcut3r_512_dpt.pth --img_dir examples/001 --frames 13 90 300
 ```
 
 See [`docs/eval.md`](docs/eval.md) for the datasets and the protocol.
