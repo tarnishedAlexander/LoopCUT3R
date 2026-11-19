@@ -15,7 +15,7 @@ protocol.
 
 ## Results
 
-Parameters, memory and speed (RTX 5090, 512x288 input, frame-by-frame streaming):
+Parameters, memory and speed (RTX 5090, 512x288 input, frame-by-frame):
 
 | | CUT3R | LoopCUT3R | change |
 |---|---:|---:|---:|
@@ -23,12 +23,17 @@ Parameters, memory and speed (RTX 5090, 512x288 input, frame-by-frame streaming)
 | Encoder | 302.31 M (24 blocks) | 37.79 M (3 blocks x 8 passes) | -87.5 % |
 | Decoder, both branches | 226.88 M | 56.72 M | -75.0 % |
 | Weights in GPU memory | 3.01 GB | 1.39 GB | -53.8 % |
-| Peak VRAM, 13 frames | 3.48 GB | 1.85 GB | -46.8 % |
-| Peak VRAM, 300 frames | 7.69 GB | 6.05 GB | -21.3 % |
-| Speed, 13 frames | 35.0 FPS | 47.2 FPS | +35 % |
+| Peak VRAM, stream, 13 frames | 3.48 GB | 1.85 GB | -46.8 % |
+| Peak VRAM, stream, 300 frames | 7.69 GB | 6.05 GB | -21.3 % |
+| Peak VRAM, online, any length | 3.31 GB | 1.68 GB | -49.3 % |
+| Speed, stream, 13 frames | 34.5 FPS | 46.4 FPS | +35 % |
 
-The pose memory (152.31 M) and the prediction heads (81.89 M) are unchanged
-and make up 65 % of LoopCUT3R's parameters.
+*Stream* is the reference implementation (`inference_recurrent`), which keeps
+every frame's predictions on the GPU, so its memory grows with the sequence.
+*Online* keeps only the current frame and the recurrent state on the GPU, as a
+live application would, and its memory does not grow.  The pose memory
+(152.31 M) and the prediction heads (81.89 M) are unchanged and make up 65 % of
+LoopCUT3R's parameters.
 
 Camera pose (ATE and RPE translation in metres, RPE rotation in degrees; lower
 is better):

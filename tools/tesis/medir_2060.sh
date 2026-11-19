@@ -5,12 +5,12 @@
 # Hace falta en la maquina de la 2060:
 #   - los dos repositorios (CUT3R y LoopCUT3R) y su entorno de Python con PyTorch + CUDA
 #   - cut3r_512_dpt_4_64.pth                        (3,0 GB)
-#   - loopcut3r_fase3_final.pth                     (1,4 GB; esta en
-#       dataset/disk14tb/eval_tesis/para_2060/ de la maquina de entrenamiento)
+#   - loopcut3r_512_dpt.pth                         (1,4 GB; enlace en el README)
+#   - el kernel de RoPE compilado en los dos repos (cada .txt debe decir [rope] cuda)
 #
 # Uso (ajustar las cuatro rutas):
 #   CUT3R_REPO=~/CUT3R LOOP_REPO=~/LoopCUT3R \
-#   CUT3R_CKPT=~/pesos/cut3r_512_dpt_4_64.pth LOOP_CKPT=~/pesos/loopcut3r_fase3_final.pth \
+#   CUT3R_CKPT=~/pesos/cut3r_512_dpt_4_64.pth LOOP_CKPT=~/pesos/loopcut3r_512_dpt.pth \
 #   bash tools/tesis/medir_2060.sh
 #
 # Deja resultados_2060/*.json y resultados_2060/*.txt. Tarda unos minutos.

@@ -7,9 +7,13 @@ tree that does not match it builds a different architecture and drops weights
 without raising (`load_state_dict(strict=False)` only prints).  Here the load is
 checked tensor by tensor and the script aborts on any mismatch.
 
-Two modes, on the same frames:
+Three modes, on the same frames:
   batch   `inference(...)`: all frames in one call.
-  stream  `inference_recurrent(...)`: one frame at a time (online use).
+  stream  `inference_recurrent(...)`: one frame at a time, but every frame's
+          input, outputs and state snapshot stay on the GPU until the end.
+  online  `online(...)`: one frame at a time keeping only the current state;
+          each frame's outputs leave the GPU as soon as they are produced, as
+          a live application would do.  Peak VRAM does not grow with the frames.
 
     python tools/eval/efficiency.py --repo . --label loopcut3r \
         --model_path checkpoints/loopcut3r_512_dpt.pth \
@@ -57,6 +61,14 @@ if missing or unexpected or different:
     sys.exit(f"ABORT: {args.model_path} does not match the model built from {args.repo}")
 del ck, sd, msd
 
+# RoPE runs as a compiled CUDA kernel (src/croco/models/curope) or, if that is
+# missing or fails to build, as a much slower PyTorch fallback.  CUT3R uses RoPE
+# in all 48 encoder and decoder blocks and LoopCUT3R only in its decoder, so a
+# missing kernel slows CUT3R far more: compare models only with the same kernel.
+pe = [m for k, m in sys.modules.items() if k.endswith("pos_embed") and hasattr(m, "RoPE2D")]
+rope = "cuda" if pe and "curope" in pe[0].RoPE2D.__module__ else "pytorch"
+print(f"[rope] {rope} ({pe[0].__file__ if pe else '?'})", flush=True)
+
 # ---- parameters --------------------------------------------------------------
 groups = collections.OrderedDict()
 for n, p in model.named_parameters():
@@ -101,8 +113,28 @@ print(f"[resolution] HxW={hw}")
 torch.cuda.empty_cache()
 weights_gb = torch.cuda.memory_allocated() / 2**30
 print(f"[memory] weights only on GPU: {weights_gb:.2f} GB")
+
+
+def online(views, model, dev, verbose=False):
+    """The per-frame calls of `forward_recurrent` (same in CUT3R and LoopCUT3R),
+    keeping on the GPU only the current frame and the current state/memory."""
+    outs, init = [], None
+    for i, view in enumerate(views):
+        view = {k: (x.to(dev, non_blocking=True) if torch.is_tensor(x) else x) for k, x in view.items()}
+        img_out, pos, _ = model._encode_image(view["img"], view["true_shape"])
+        feat = img_out[-1]
+        if init is None:
+            state_feat, state_pos = model._init_state(feat, pos)
+            mem = model.pose_retriever.mem.expand(feat.shape[0], -1, -1) if model.pose_head_flag else None
+            init = (state_feat.clone(), mem.clone() if mem is not None else None)
+        pred, (state_feat, mem) = model._forward_decoder_step(
+            {i: view}, i, feat, pos, view["true_shape"], init[0], init[1], state_feat, state_pos, mem)
+        outs.append({k: x.cpu() for k, x in pred.items() if torch.is_tensor(x)})
+    return outs
+
+
 res = []
-for mode, fn in (("batch", inference), ("stream", inference_recurrent)):
+for mode, fn in (("batch", inference), ("stream", inference_recurrent), ("online", online)):
     for n in args.frames:
         v = make_views(n)
         timed = args.timed if n <= 100 else 2
@@ -132,4 +164,5 @@ for mode, fn in (("batch", inference), ("stream", inference_recurrent)):
 if args.out:
     json.dump(dict(label=args.label, repo=args.repo, model_path=args.model_path, hw=hw,
                    params_total=total, params=groups, distinct_blocks=nblk, block_applications_per_frame=applications,
-                   weights_gb=round(weights_gb, 3), runs=res), open(args.out, "w"), indent=1)
+                   weights_gb=round(weights_gb, 3), rope=rope,
+                   gpu=torch.cuda.get_device_name(), runs=res), open(args.out, "w"), indent=1)

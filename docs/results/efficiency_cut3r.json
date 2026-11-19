@@ -1,7 +1,7 @@
 {
  "label": "cut3r",
- "repo": "/app/CUT3R",
- "model_path": "/app/recurrentTransformer/LoopCUT3R/checkpoints/cut3r_512_dpt_4_64.pth",
+ "repo": "CUT3R",
+ "model_path": "cut3r_512_dpt_4_64.pth (CUT3R release)",
  "hw": [
   288,
   512
@@ -40,42 +40,62 @@
   "dec_blocks_state": 12.0
  },
  "weights_gb": 3.006,
+ "rope": "cuda",
+ "gpu": "NVIDIA GeForce RTX 5090",
  "runs": [
   {
    "mode": "batch",
    "frames": 13,
    "peak_gb": 3.505,
-   "fps": 36.48
+   "fps": 35.8
   },
   {
    "mode": "batch",
    "frames": 90,
    "peak_gb": 6.201,
-   "fps": 36.58
+   "fps": 36.01
   },
   {
    "mode": "batch",
    "frames": 300,
    "peak_gb": 13.702,
-   "fps": 36.36
+   "fps": 36.19
   },
   {
    "mode": "stream",
    "frames": 13,
    "peak_gb": 3.48,
-   "fps": 35.02
+   "fps": 34.46
   },
   {
    "mode": "stream",
    "frames": 90,
    "peak_gb": 4.608,
-   "fps": 34.17
+   "fps": 33.8
   },
   {
    "mode": "stream",
    "frames": 300,
    "peak_gb": 7.685,
-   "fps": 33.71
+   "fps": 33.68
+  },
+  {
+   "mode": "online",
+   "frames": 13,
+   "peak_gb": 3.31,
+   "fps": 34.94
+  },
+  {
+   "mode": "online",
+   "frames": 90,
+   "peak_gb": 3.31,
+   "fps": 34.8
+  },
+  {
+   "mode": "online",
+   "frames": 300,
+   "peak_gb": 3.31,
+   "fps": 34.61
   }
  ]
 }

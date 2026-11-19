@@ -60,9 +60,19 @@ python tools/eval/efficiency.py --repo . --label loopcut3r --model_path checkpoi
 ```
 
 Reports parameters per module, block applications per frame, weights in GPU
-memory, and peak VRAM and FPS in batch and streaming mode.  The load is checked
-tensor by tensor.  `tools/tesis/medir_2060.sh` runs it for both models on a
-6 GB GPU.
+memory, and peak VRAM and FPS in three modes: batch (all frames in one call),
+stream (`inference_recurrent`, predictions kept on the GPU) and online (only the
+current frame and the state on the GPU; same predictions as stream).  The load
+is checked tensor by tensor.  `tools/tesis/medir_2060.sh` runs it for both
+models on a 6 GB GPU.
+
+The script prints `[rope] cuda` or `[rope] pytorch`.  Without the compiled RoPE
+kernel (`src/croco/models/curope`) CroCo falls back to a slow PyTorch version.
+CUT3R applies RoPE in all 48 blocks and LoopCUT3R only in its decoder, so a
+missing kernel slows CUT3R much more than LoopCUT3R: compare speeds only when
+both runs report `[rope] cuda`.  `add_path_to_dust3r` also puts the
+checkpoint's folder on the Python path, so keep checkpoints out of another
+source tree's `src/`.
 
 ## Other launchers from CUT3R
 
