@@ -97,24 +97,38 @@ def por_escena():
 
 
 # ---------------------------------------------------------------- memoria y velocidad
-def eficiencia():
-    c = json.load(open("docs/results/efficiency_cut3r.json")); l = json.load(open("docs/results/efficiency_loop.json"))
+def eficiencia(gpu="5090"):
+    """VRAM pico frente a la longitud (stream punteado, online solido, x = sin
+    memoria) y FPS en stream con 13 fotogramas, a 512x288."""
+    if gpu == "5090":
+        c, l = (json.load(open(f"docs/results/efficiency_{m}.json")) for m in ("cut3r", "loop"))
+    else:
+        c, l = (json.load(open(f"docs/results/efficiency_{gpu}_{m}_512.json")) for m in ("cut3r", "loop"))
     fig, ax = plt.subplots(1, 2, figsize=(W, 2.2), gridspec_kw={"width_ratios": [1.5, 1]})
-    for dd, col, nom, mkr in ((c, C_CUT, "CUT3R", "o"), (l, C_LOOP, "Loop-CUT3R", "s")):
-        s = [r for r in dd["runs"] if r["mode"] == "stream"]
-        ax[0].plot([r["frames"] for r in s], [r["peak_gb"] for r in s], color=col, marker=mkr, ms=3.5, label=nom)
-        ax[0].axhline(dd["weights_gb"], color=col, lw=0.6, ls=":")
-    ax[0].axhline(6, color=C_GRIS, lw=0.8, ls="--"); ax[0].text(300, 6.12, "6 GB", ha="right", va="bottom", fontsize=8, color=C_GRIS)
-    ax[0].set_xlabel("Fotogramas de la secuencia"); ax[0].set_ylabel("VRAM pico (GB)"); ax[0].set_title("(a) Memoria en streaming", loc="left")
-    ax[0].set_ylim(0, 8.4); ax[0].legend(loc="upper left")
+    ymax = 10.5
+    for dd, col, nom, mkr, dx in ((c, C_CUT, "CUT3R", "o", -6), (l, C_LOOP, "Loop-CUT3R", "s", 6)):
+        for modo, ls in (("stream", ":"), ("online", "-")):
+            ok = [r for r in dd["runs"] if r["mode"] == modo and r["peak_gb"] is not None]
+            oom = [r for r in dd["runs"] if r["mode"] == modo and r["peak_gb"] is None]
+            ax[0].plot([r["frames"] for r in ok], [r["peak_gb"] for r in ok], color=col, ls=ls, marker=mkr, ms=3.5,
+                       label=f"{nom} ({modo})")
+            for r in oom:
+                ax[0].plot(r["frames"] + dx, 6, color=col, marker="x", ms=6, mew=1.5, ls="none")
+        ax[0].axhline(dd["weights_gb"], color=col, lw=0.6, ls=(0, (1, 2)))
+    ax[0].axhline(6, color=C_GRIS, lw=0.8, ls="--"); ax[0].text(4, 6.12, "6 GB", ha="left", va="bottom", fontsize=8, color=C_GRIS)
+    ax[0].set_xlabel("Fotogramas de la secuencia"); ax[0].set_ylabel("VRAM pico (GB)")
+    ax[0].set_title("(a) Memoria", loc="left"); ax[0].set_ylim(0, ymax); ax[0].set_xlim(0, 320)
+    ax[0].legend(loc="upper center", ncol=2, fontsize=7, bbox_to_anchor=(0.5, 1.0))
     f = lambda dd: [r["fps"] for r in dd["runs"] if r["mode"] == "stream" and r["frames"] == 13][0]
-    ax[1].bar([0, 1], [f(c), f(l)], color=[C_CUT, C_LOOP], width=0.55)
-    for i, v in enumerate([f(c), f(l)]):
-        ax[1].text(i, v + 0.8, f"{v:.1f}", ha="center", va="bottom", fontsize=8)
-    ax[1].set_xticks([0, 1]); ax[1].set_xticklabels(["CUT3R", "Loop-CUT3R"]); ax[1].set_ylabel("FPS"); ax[1].set_ylim(0, 56)
+    v = [f(c), f(l)]
+    ax[1].bar([0, 1], v, color=[C_CUT, C_LOOP], width=0.55)
+    for i, x in enumerate(v):
+        ax[1].text(i, x * 1.02, f"{x:.1f}", ha="center", va="bottom", fontsize=8)
+    ax[1].set_xticks([0, 1]); ax[1].set_xticklabels(["CUT3R", "Loop-CUT3R"]); ax[1].set_ylabel("FPS")
+    ax[1].set_ylim(0, max(v) * 1.2)
     ax[1].set_title("(b) Velocidad, 512×288", loc="left")
     fig.tight_layout(w_pad=1.5)
-    guardar(fig, "eficiencia_5090")
+    guardar(fig, f"eficiencia_{gpu}")
 
 
 # ---------------------------------------------------------------- progresion por fase
@@ -189,4 +203,4 @@ def barrido():
 
 
 if __name__ == "__main__":
-    curvas(); por_escena(); eficiencia(); progresion(); sonda(); barrido()
+    curvas(); por_escena(); eficiencia("5090"); eficiencia("2060"); progresion(); sonda(); barrido()
