@@ -74,7 +74,7 @@ cd src/croco/models/curope/ && python setup.py build_ext --inplace && cd -
 |---|---|---|---|
 | [`loopcut3r_512_dpt.pth`](https://drive.google.com/file/d/1ZShDKb_0NKOPSMvboJFOc5CqCFJkODkj/view?usp=sharing) | 512x384 ... 256x512 (10 aspect ratios) | DPT | 1.43 GB |
 
-This is the phase 3 model whose results are reported below.  The file holds the
+This is the phase 3 model whose results are reported above.  The file holds the
 weights and the model configuration, so it loads with `--model_path` alone.
 
 ```bash
