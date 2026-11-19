@@ -64,7 +64,8 @@ memory, and peak VRAM and FPS in three modes: batch (all frames in one call),
 stream (`inference_recurrent`, predictions kept on the GPU) and online (only the
 current frame and the state on the GPU; same predictions as stream).  The load
 is checked tensor by tensor.  `tools/tesis/medir_2060.sh` runs it for both
-models on a 6 GB GPU.
+models on a 6 GB GPU (used on an RTX 2060 and, inside the `docker/` image, on
+an RTX 4050 laptop; results in `docs/results/efficiency_{2060,4050}_*.json`).
 
 The script prints `[rope] cuda` or `[rope] pytorch`.  Without the compiled RoPE
 kernel (`src/croco/models/curope`) CroCo falls back to a slow PyTorch version.

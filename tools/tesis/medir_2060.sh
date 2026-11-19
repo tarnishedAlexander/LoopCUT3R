@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Mide VRAM pico y FPS de CUT3R y Loop-CUT3R en la GPU de 6 GB (RTX 2060).
+# Mide VRAM pico y FPS de CUT3R y Loop-CUT3R en una GPU de 6 GB (se uso en la
+# RTX 2060 y, dentro de la imagen de docker/, en la RTX 4050 con OUT=resultados_4050).
 # Cada modelo corre con su propio codigo y la carga de pesos se verifica.
 #
-# Hace falta en la maquina de la 2060:
+# Hace falta en la maquina de la GPU:
 #   - los dos repositorios (CUT3R y LoopCUT3R) y su entorno de Python con PyTorch + CUDA
 #   - cut3r_512_dpt_4_64.pth                        (3,0 GB)
 #   - loopcut3r_512_dpt.pth                         (1,4 GB; enlace en el README)
