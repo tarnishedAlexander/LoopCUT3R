@@ -103,3 +103,32 @@ disk layout.
 ## Results
 
 `results/efficiency_loop_rope.json`: efficiency of the `enc_rope` variant.
+
+## Attribution: initialisation versus depth recurrence (in progress)
+
+`attr_control.yaml`, `attr_loop_cut3rdec.yaml`, `attr_hybrid_full.yaml`,
+`scripts/init_from_cut3r.py`, `scripts/check_init.py`
+
+Phase 1 loaded only the encoder from Raptor (`load_only_encoder: True`), so
+LoopCUT3R's decoder, heads, pose memory and state tokens started from random
+weights: their cosine similarity to CUT3R's is about 0, while CUT3R's came
+from DUSt3R/CroCo pretraining and ~185 epochs.  The gap to CUT3R therefore mixes
+initialisation and training budget with depth recurrence.  Three arms with the
+same data, schedule and phase-3b encoder separate them:
+
+| Arm | Decoder | Initialised from |
+|---|---|---|
+| `attr_control` | 3 shared x 4 | phase 3b (as released) |
+| `attr_loop_cut3rdec` | 3 shared x 4 | CUT3R (decoder blocks 0, 4, 8), heads and pose memory from CUT3R |
+| `attr_hybrid_full` | 12 independent, as CUT3R | CUT3R |
+
+```bash
+python experiments/scripts/init_from_cut3r.py --loop PHASE3B.pth --loop_cfg config/recurrent_stage3b.yaml \
+    --cut3r checkpoints/cut3r_512_dpt_4_64.pth --decoder full   --out checkpoints/init_full.pth
+python experiments/scripts/init_from_cut3r.py --loop PHASE3B.pth --loop_cfg config/recurrent_stage3b.yaml \
+    --cut3r checkpoints/cut3r_512_dpt_4_64.pth --decoder shared --out checkpoints/init_shared.pth
+python experiments/scripts/check_init.py checkpoints/init_full.pth checkpoints/init_shared.pth
+```
+
+`check_init.py` loads strictly: `ARCroco3DStereo.load_state_dict` otherwise
+falls back silently to dropping the decoder keys when any tensor mismatches.
