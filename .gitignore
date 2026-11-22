@@ -79,3 +79,6 @@ examples/*/color/
 examples/*/conf/
 examples/*/depth/
 .scratch/
+
+# machine-specific copies of experiment configs (absolute data paths)
+experiments/configs/local/
