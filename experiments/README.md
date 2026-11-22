@@ -130,5 +130,15 @@ python experiments/scripts/init_from_cut3r.py --loop PHASE3B.pth --loop_cfg conf
 python experiments/scripts/check_init.py checkpoints/init_full.pth checkpoints/init_shared.pth
 ```
 
+Run from the repository root.  Datasets packed into a single `.h5` are found
+through `LOOPCUT3R_H5_DIRS` (each folder and its direct subfolders are searched);
+without it, a root whose images live only in the `.h5` fails with
+"Could not load image".
+
+```bash
+LOOPCUT3R_H5_DIRS=/data:/data/fast HYDRA_FULL_ERROR=1 accelerate launch --num_processes 1 \
+    --mixed_precision bf16 src/train.py --config-path=$PWD/experiments/configs --config-name attr_control
+```
+
 `check_init.py` loads strictly: `ARCroco3DStereo.load_state_dict` otherwise
 falls back silently to dropping the decoder keys when any tensor mismatches.
