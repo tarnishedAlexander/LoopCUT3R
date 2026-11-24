@@ -104,7 +104,7 @@ disk layout.
 
 `results/efficiency_loop_rope.json`: efficiency of the `enc_rope` variant.
 
-## Attribution: initialisation versus depth recurrence (in progress)
+## Attribution: initialisation versus depth recurrence
 
 `attr_control.yaml`, `attr_loop_cut3rdec.yaml`, `attr_hybrid_full.yaml`,
 `scripts/init_from_cut3r.py`, `scripts/check_init.py`
@@ -142,3 +142,27 @@ LOOPCUT3R_H5_DIRS=/data:/data/fast HYDRA_FULL_ERROR=1 accelerate launch --num_pr
 
 `check_init.py` loads strictly: `ARCroco3DStereo.load_state_dict` otherwise
 falls back silently to dropping the decoder keys when any tensor mismatches.
+
+### Result (3 epochs, 10 % of the phase-3b mixture each, RTX 5090)
+
+Camera pose, `pose_table.py` with every label cut to the same frames (ATE, RPE
+translation in metres, RPE rotation in degrees):
+
+| | ScanNet ATE | RPE t | RPE r | TUM ATE | RPE t | RPE r | Sintel ATE | RPE t | RPE r |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| CUT3R | 0.169 | 0.205 | 3.02 | 0.145 | 0.186 | 7.84 | 0.175 | 0.071 | 0.65 |
+| LoopCUT3R (released) | 0.890 | 0.801 | 54.81 | 0.780 | 0.572 | 42.69 | 0.237 | 0.112 | 2.89 |
+| `attr_control` | 0.941 | 0.778 | 55.76 | 0.802 | 0.577 | 39.66 | 0.249 | 0.110 | 2.28 |
+| `attr_loop_cut3rdec` | 0.977 | 0.946 | 45.01 | 0.862 | 0.640 | 30.87 | 0.249 | 0.157 | 0.94 |
+| `attr_hybrid_full` | 0.914 | 0.855 | 55.72 | 0.537 | 0.608 | 29.19 | 0.160 | 0.088 | 2.00 |
+
+Video depth (scale & shift), Abs Rel: Sintel 0.551 / 0.620 / 0.545 and Bonn
+0.116 / 0.270 / 0.206 for control / loop_cut3rdec / hybrid_full (CUT3R 0.456 /
+0.053, released LoopCUT3R 0.581 / 0.110).
+
+Reading: initialising the shared decoder from CUT3R does not help, and giving
+the recurrent encoder CUT3R's whole 12-block decoder, heads and pose memory
+helps on Sintel (ATE below CUT3R) and TUM but leaves ScanNet unchanged, with a
+~55 degree per-step rotation error in every arm (the encoder-RoPE runs too).
+The decoder is therefore not where the ScanNet/TUM pose gap comes from; the
+recurrent encoder's features are.
