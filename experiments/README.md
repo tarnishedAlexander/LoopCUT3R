@@ -188,3 +188,22 @@ the normalised output the decoder reads (-0.02, relative L2 error 1.4), with
 linear CKA 0.45-0.50.  The gap is the same on all three datasets, so ScanNet
 fails because its wide baselines are harder, not because its images are
 encoded worse.  `attr_control` gives the same numbers.
+
+### Encoder distillation onto CUT3R (in progress)
+
+`scripts/distill_encoder.py` trains only the recurrent encoder (RoPE on,
+gradient through all 8 passes) to reproduce CUT3R's normalised encoder output;
+the teacher is CUT3R's encoder rebuilt in this tree (token cosine 0.9999
+against the CUT3R tree).  Validation cosine on the diagnostic frames after 1000
+steps (ScanNet / TUM / Sintel; all start near 0):
+
+| Student initialisation | 1000 steps |
+|---|---|
+| current recurrent encoder | 0.60 / 0.65 / 0.63 |
+| CUT3R blocks 6, 12, 18 | 0.66 / 0.71 / 0.66 |
+| CUT3R blocks 9, 10, 11 | 0.71 / 0.73 / 0.68 |
+| CUT3R blocks 9, 10, 11, plus pass k against block 3k (`--inter_w 0.5`) | 0.72 / 0.75 / 0.70 |
+
+The long run uses the last row, 120k steps of 16 images (~29 images/s on the
+RTX 5090).  Its encoder goes into a full model with
+`init_from_cut3r.py --loop <encoder.pth> --decoder full`.
