@@ -166,3 +166,25 @@ helps on Sintel (ATE below CUT3R) and TUM but leaves ScanNet unchanged, with a
 ~55 degree per-step rotation error in every arm (the encoder-RoPE runs too).
 The decoder is therefore not where the ScanNet/TUM pose gap comes from; the
 recurrent encoder's features are.
+
+### Diagnostic: is it the encoder?
+
+`scripts/swap_encoder.py`, `scripts/encoder_gap.py`
+
+Putting CUT3R's own 24-block encoder in front of `attr_hybrid_full`'s decoder,
+heads and pose memory (no retraining, evaluated from the CUT3R tree):
+
+| | ScanNet ATE | RPE r | TUM ATE | Sintel ATE | Sintel AbsRel | Bonn AbsRel |
+|---|---:|---:|---:|---:|---:|---:|
+| CUT3R | 0.169 | 3.02 | 0.145 | 0.175 | 0.456 | 0.053 |
+| CUT3R encoder + hybrid decoder | 0.328 | 10.62 | 0.187 | 0.140 | 0.388 | 0.110 |
+| `attr_hybrid_full` (recurrent encoder) | 0.914 | 55.72 | 0.537 | 0.160 | 0.545 | 0.206 |
+
+Swapping only the encoder removes most of the gap, so the recurrent encoder is
+the bottleneck.  Its features are not in CUT3R's space at all: against CUT3R's
+encoder (129 frames of ScanNet, TUM and Sintel; recurrent pass k against CUT3R
+block 3k) the mean token cosine similarity is about 0 at every depth, including
+the normalised output the decoder reads (-0.02, relative L2 error 1.4), with
+linear CKA 0.45-0.50.  The gap is the same on all three datasets, so ScanNet
+fails because its wide baselines are harder, not because its images are
+encoded worse.  `attr_control` gives the same numbers.
