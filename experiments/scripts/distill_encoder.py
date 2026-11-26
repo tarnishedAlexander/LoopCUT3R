@@ -158,6 +158,17 @@ def main():
     else:
         sys.exit(f"unknown --init {a.init}")
     student = Encoder(s_embed, s_blocks, s_norm, passes=passes, ckpt=True).to(dev)
+    # Free host memory before the loader forks its workers: the full state
+    # dicts and the model's decoder (~5-7 GB) are not needed any more.
+    keep = ("patch_embed_ray_map.", "enc_blocks_ray_map.", "enc_norm_ray_map.",
+            "masked_img_token", "masked_ray_map_token")
+    ssd = {k: v for k, v in ssd.items() if k.startswith(keep)}
+    del csd
+    enc_names = ("patch_embed", "enc_blocks", "enc_norm", "rope")
+    for name, _ in list(model.named_children()):
+        if name not in enc_names:
+            setattr(model, name, torch.nn.Identity())
+    import gc; gc.collect()
     n_par = sum(p.numel() for p in student.parameters())
     print(f"student {n_par / 1e6:.2f} M params ({nblk} blocks x {passes} passes), init={a.init}")
 
