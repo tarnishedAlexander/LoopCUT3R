@@ -78,10 +78,10 @@ class Encoder(torch.nn.Module):
         super().__init__()
         self.patch_embed, self.blocks, self.norm, self.passes, self.ckpt = patch_embed, blocks, norm, passes, ckpt
 
-    def forward(self, img, true_shape, every=None):
+    def forward(self, img, true_shape, every=None, passes=None):
         x, pos = self.patch_embed(img, true_shape=true_shape)
         inter = []
-        for p in range(self.passes):
+        for p in range(passes or self.passes):
             def run(x, pos=pos):
                 for b in self.blocks:
                     x = b(x, pos)
@@ -110,12 +110,25 @@ def main():
     ap.add_argument("--val_every", type=int, default=2000)
     ap.add_argument("--check_teacher", default=None, help="encoder_gap.py dump of CUT3R on --val_images")
     ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--passes_min", type=int, default=None,
+                    help="with --passes_max: each step unrolls a random number of passes in [min, max]")
+    ap.add_argument("--passes_max", type=int, default=None)
+    ap.add_argument("--val_passes", default=None, help="comma list of pass counts to validate, e.g. 4,6,8,12")
+    ap.add_argument("--num_steps", type=int, default=None, help="override the model's passes (e.g. 1)")
+    ap.add_argument("--arch", choices=["recurrent", "narrow"], default="recurrent",
+                    help="narrow: baseline of --narrow_depth independent blocks of width --narrow_dim, "
+                         "random init, projected to 1024")
+    ap.add_argument("--narrow_dim", type=int, default=384)
+    ap.add_argument("--narrow_depth", type=int, default=24)
     a = ap.parse_args()
+    import random
     os.makedirs(a.out_dir, exist_ok=True)
     dev = "cuda"
 
     cfg_y = OmegaConf.load(a.config)
     model_str = set_field(cfg_y.model, "enc_rope", True)
+    if a.num_steps:
+        model_str = set_field(set_field(model_str, "num_steps", a.num_steps), "use_tbptl", False)
     model = eval(model_str)
     passes, nblk = int(model.num_steps), len(model.enc_blocks)
     rope = model.rope
@@ -155,8 +168,16 @@ def main():
         for b, i in zip(s_blocks, idx):
             cut3r_block_into(b, csd, i)
         s_embed.load_state_dict(t_embed.state_dict()); s_norm.load_state_dict(t_norm.state_dict())
-    else:
+    elif a.arch != "narrow":
         sys.exit(f"unknown --init {a.init}")
+    if a.arch == "narrow":
+        from dust3r.patch_embed import get_patch_embed
+        d = a.narrow_dim
+        s_embed = get_patch_embed(type(model.patch_embed).__name__, model.patch_embed.img_size, 16, d)
+        s_blocks = torch.nn.ModuleList([RecurrentBlock(dim=d, num_heads=d // 64, mlp_ratio=4.0, init_values=None,
+                                                       rope=rope) for _ in range(a.narrow_depth)])
+        s_norm = torch.nn.Sequential(torch.nn.LayerNorm(d), torch.nn.Linear(d, 1024))
+        passes, nblk = 1, a.narrow_depth
     student = Encoder(s_embed, s_blocks, s_norm, passes=passes, ckpt=True).to(dev)
     # Free host memory before the loader forks its workers: the full state
     # dicts and the model's decoder (~5-7 GB) are not needed any more.
@@ -170,7 +191,8 @@ def main():
             setattr(model, name, torch.nn.Identity())
     import gc; gc.collect()
     n_par = sum(p.numel() for p in student.parameters())
-    print(f"student {n_par / 1e6:.2f} M params ({nblk} blocks x {passes} passes), init={a.init}")
+    print(f"student {n_par / 1e6:.2f} M params ({nblk} blocks x {passes} passes), init={a.init}, arch={a.arch}")
+    val_passes = [int(x) for x in a.val_passes.split(",")] if a.val_passes else [passes]
 
     val = torch.load(a.val_images, weights_only=False)
 
@@ -180,10 +202,13 @@ def main():
         for it in val:
             img, ts = it["img"].to(dev), it["true_shape"].reshape(1, 2).to(dev)
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                t, _ = teacher(img, ts); s, _ = student(img, ts)
-            res.setdefault(it["set"], []).append(F.cosine_similarity(s.float(), t.float(), dim=-1).mean().item())
+                t, _ = teacher(img, ts)
+                for n in val_passes:
+                    s, _ = student(img, ts, passes=n)
+                    key = it["set"] if len(val_passes) == 1 else f"p{n}/{it['set']}"
+                    res.setdefault(key, []).append(F.cosine_similarity(s.float(), t.float(), dim=-1).mean().item())
         student.train()
-        return {k: sum(v) / len(v) for k, v in res.items()}
+        return {k: round(sum(v) / len(v), 4) for k, v in res.items()}
 
     if a.check_teacher:
         ref = torch.load(a.check_teacher, weights_only=False)["acts"]
@@ -202,7 +227,10 @@ def main():
     last = os.path.join(a.out_dir, "last.pth")
     if a.resume and os.path.exists(last):
         ck = torch.load(last, map_location="cpu", weights_only=False)
-        torch.nn.Module.load_state_dict(model, ck["model"], strict=False)
+        if a.arch == "narrow":
+            student.load_state_dict(ck["model"])
+        else:
+            torch.nn.Module.load_state_dict(model, ck["model"], strict=False)
         opt.load_state_dict(ck["opt"]); step0 = ck["step"]
         print("resumed at step", step0)
 
@@ -213,6 +241,9 @@ def main():
         return a.min_lr + 0.5 * (a.lr - a.min_lr) * (1 + math.cos(math.pi * q))
 
     def save(path, step, extra=None):
+        if a.arch == "narrow":
+            torch.save({"student": student.state_dict(), "step": step, "distill": vars(a), **(extra or {})}, path)
+            return
         enc = {k: v for k, v in model.state_dict().items()
                if k.startswith(("patch_embed.", "enc_blocks.", "enc_norm."))}
         for k, v in ssd.items():  # ray-map encoder and mask tokens unchanged from --student
@@ -248,7 +279,8 @@ def main():
                 with torch.no_grad():
                     t_out, _ = teacher(img, ts)
                     t_inter = None
-                s_out, s_inter = student(img, ts, every=bool(a.inter_w))
+                n_pass = random.randint(a.passes_min, a.passes_max) if a.passes_min else None
+                s_out, s_inter = student(img, ts, every=bool(a.inter_w), passes=n_pass)
                 s, t = s_out.float(), t_out.float()
                 loss = (1 - F.cosine_similarity(s, t, dim=-1)).mean() + ((s - t) ** 2).mean() / (t ** 2).mean()
                 if a.inter_w:
@@ -274,9 +306,10 @@ def main():
                 v = validate()
                 print(f"step {step} val cos {v}", flush=True); log.write(f"{step}\tval\t{v}\n"); log.flush()
                 save(os.path.join(a.out_dir, "encoder.pth"), step, {"val_cos": v})
-                torch.save({"model": {k: x for k, x in model.state_dict().items()
-                                      if k.startswith(("patch_embed.", "enc_blocks.", "enc_norm."))},
-                            "opt": opt.state_dict(), "step": step}, last)
+                state = (student.state_dict() if a.arch == "narrow" else
+                         {k: x for k, x in model.state_dict().items()
+                          if k.startswith(("patch_embed.", "enc_blocks.", "enc_norm."))})
+                torch.save({"model": state, "opt": opt.state_dict(), "step": step}, last)
         epoch += 1
     print("done", step)
 
