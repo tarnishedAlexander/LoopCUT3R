@@ -237,3 +237,38 @@ fine-tuning; `num_steps` changed in the checkpoint config):
 Accuracy peaks at the trained depth: fewer passes degrade it sharply and more do
 not help, so compute is not adjustable at inference yet; that needs training
 with a variable number of passes.
+
+### Variable number of encoder passes
+
+Continued distillation from the 8-pass encoder above with a random number of
+passes per step (4 to 12, gradient through all of them), 40k steps:
+
+    python experiments/scripts/distill_encoder.py ... \
+        --student checkpoints/distill_enc_c91011_inter/encoder.pth --init student \
+        --passes_min 4 --passes_max 12 --val_passes 4,6,8,12 --steps 40000 --lr 1e-4
+
+Validation cosine to CUT3R's encoder output (ScanNet / TUM / Sintel):
+
+| Passes | before (8-pass training) | after (4-12 passes) |
+|---:|---|---|
+| 4 | 0.668 / 0.643 / 0.609 | 0.912 / 0.905 / 0.882 |
+| 6 | 0.780 / 0.769 / 0.746 | 0.923 / 0.917 / 0.891 |
+| 8 | 0.928 / 0.919 / 0.895 | 0.925 / 0.917 / 0.890 |
+| 12 | 0.817 / 0.809 / 0.785 | 0.922 / 0.913 / 0.885 |
+
+Benchmarks, same setup as above (CUT3R's decoder, heads and pose memory, no
+fine-tuning; `num_steps` changed in the checkpoint config):
+
+| Passes | ScanNet ATE | RPE t | RPE r | TUM ATE | Sintel ATE | Sintel AbsRel | Bonn AbsRel |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| CUT3R (this tree) | 0.164 | 0.193 | 2.90 | 0.142 | 0.163 | 0.467 | 0.053 |
+| 4 | 0.254 | 0.332 | 15.14 | 0.147 | 0.132 | 0.315 | 0.058 |
+| 6 | 0.249 | 0.333 | 11.57 | 0.150 | 0.143 | 0.337 | 0.057 |
+| 8 | 0.244 | 0.328 | 11.45 | 0.153 | 0.150 | 0.348 | 0.058 |
+| 12 | 0.257 | 0.343 | 11.76 | 0.155 | 0.161 | 0.367 | 0.058 |
+
+Compute is now adjustable at inference: 4 passes (half the encoder compute of
+8) is within noise of 8 on ScanNet and TUM and slightly better on Sintel, where
+the 8-pass-only encoder lost 0.65 ATE on ScanNet at 4 passes.  More than 8
+passes does not help.  The remaining gap to CUT3R is ScanNet rotation
+(11-15 deg RPE r vs 2.9), the target of joint fine-tuning.
