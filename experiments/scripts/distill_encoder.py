@@ -160,7 +160,7 @@ def main():
     student = Encoder(s_embed, s_blocks, s_norm, passes=passes, ckpt=True).to(dev)
     # Free host memory before the loader forks its workers: the full state
     # dicts and the model's decoder (~5-7 GB) are not needed any more.
-    keep = ("patch_embed_ray_map.", "enc_blocks_ray_map.", "enc_norm_ray_map.",
+    keep = ("patch_embed_ray_map.", "enc_blocks_ray_map.", "enc_norm_ray_map.", "mask_token",
             "masked_img_token", "masked_ray_map_token")
     ssd = {k: v for k, v in ssd.items() if k.startswith(keep)}
     del csd
@@ -217,7 +217,7 @@ def main():
                if k.startswith(("patch_embed.", "enc_blocks.", "enc_norm."))}
         for k, v in ssd.items():  # ray-map encoder and mask tokens unchanged from --student
             if k.startswith(("patch_embed_ray_map.", "enc_blocks_ray_map.", "enc_norm_ray_map.",
-                             "masked_img_token", "masked_ray_map_token")):
+                             "mask_token", "masked_img_token", "masked_ray_map_token")):
                 enc[k] = v
         torch.save({"model": enc, "args": _ap.Namespace(model=model_str), "step": step,
                     "distill": vars(a), **(extra or {})}, path)

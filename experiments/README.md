@@ -207,3 +207,19 @@ steps (ScanNet / TUM / Sintel; all start near 0):
 The long run uses the last row, 120k steps of 16 images (~29 images/s on the
 RTX 5090).  Its encoder goes into a full model with
 `init_from_cut3r.py --loop <encoder.pth> --decoder full`.
+
+Result after 120k steps: validation cosine 0.93 / 0.92 / 0.90 (ScanNet / TUM /
+Sintel).  The distilled encoder in front of CUT3R's unmodified decoder, heads and
+pose memory (`init_from_cut3r.py --decoder full`, no fine-tuning; 528.8 M
+parameters, encoder 38.6 M), against CUT3R run through the same code
+(`scripts/cut3r_in_loop_tree.py`, 24 blocks x 1 pass; its numbers match CUT3R's
+own tree within noise):
+
+| | ScanNet ATE | RPE t | RPE r | TUM ATE | RPE r | Sintel ATE | RPE t | Sintel AbsRel | Bonn AbsRel |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| CUT3R (this tree) | 0.164 | 0.193 | 2.90 | 0.142 | 7.24 | 0.163 | 0.071 | 0.467 | 0.053 |
+| distilled recurrent encoder + CUT3R decoder | 0.250 | 0.323 | 12.96 | 0.142 | 4.87 | 0.145 | 0.058 | 0.344 | 0.059 |
+| LoopCUT3R (released) | 0.890 | 0.801 | 54.81 | 0.780 | 42.69 | 0.237 | 0.112 | 0.581 | 0.110 |
+
+The CUT3R-in-this-tree checkpoint does not load CUT3R's ray-map encoder (a
+different layout); ray maps are not used by these benchmarks.
