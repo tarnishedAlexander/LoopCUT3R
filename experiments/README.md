@@ -223,3 +223,17 @@ own tree within noise):
 
 The CUT3R-in-this-tree checkpoint does not load CUT3R's ray-map encoder (a
 different layout); ray maps are not used by these benchmarks.
+
+Encoder passes at inference (same distilled weights, trained with 8 passes, no
+fine-tuning; `num_steps` changed in the checkpoint config):
+
+| Passes | ScanNet ATE | TUM ATE | Sintel ATE | Sintel AbsRel | Bonn AbsRel |
+|---:|---:|---:|---:|---:|---:|
+| 4 | 0.896 | 0.690 | 0.275 | 0.611 | 0.228 |
+| 6 | 0.616 | 0.329 | 0.188 | 0.499 | 0.107 |
+| 8 | 0.250 | 0.142 | 0.145 | 0.344 | 0.059 |
+| 12 | 0.304 | 0.203 | 0.175 | 0.468 | 0.057 |
+
+Accuracy peaks at the trained depth: fewer passes degrade it sharply and more do
+not help, so compute is not adjustable at inference yet; that needs training
+with a variable number of passes.
