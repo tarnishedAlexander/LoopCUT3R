@@ -272,3 +272,37 @@ Compute is now adjustable at inference: 4 passes (half the encoder compute of
 the 8-pass-only encoder lost 0.65 ATE on ScanNet at 4 passes.  More than 8
 passes does not help.  The remaining gap to CUT3R is ScanNet rotation
 (11-15 deg RPE r vs 2.9), the target of joint fine-tuning.
+
+### Non-recurrent baselines
+
+Is iterating the blocks what helps, or would the same parameters do as well
+without recurrence?  Two encoders distilled with the same loss and data for 20k
+steps:
+
+- `base_3x1`: the same 3 blocks (1024 wide, initialised from CUT3R blocks 9, 10,
+  11 like the recurrent encoder) run once (`--num_steps 1`);
+- `base_narrow384x24`: 24 independent blocks 384 wide plus a 384 -> 1024
+  projection, from scratch (`--arch narrow`), about the same parameters.
+
+| Encoder | Parameters | Validation cosine at 20k steps |
+|---|---:|---|
+| recurrent, 3 blocks x 8 passes (same init) | 38.6 M | 0.883 / 0.865 / 0.808 |
+| 3 blocks x 1 pass | 38.6 M | 0.810 / 0.799 / 0.775 |
+| 24 blocks, width 384 | 43.3 M | 0.782 / 0.768 / 0.733 |
+
+The recurrent value is mid-schedule (cosine decay over 120k steps); the
+baselines finish their decay at 20k, which favours them.  The narrow encoder
+starts from random weights and costs fewer FLOPs per image than the 1024-wide
+ones, so it is a parameter-matched, not compute-matched, baseline.
+
+Benchmarks of `base_3x1` (after 20k steps) in front of CUT3R's decoder, against
+the final recurrent encoder (160k steps in total):
+
+| Encoder | ScanNet ATE | RPE r | TUM ATE | Sintel ATE | Sintel AbsRel | Bonn AbsRel |
+|---|---:|---:|---:|---:|---:|---:|
+| recurrent, 8 passes | 0.244 | 11.45 | 0.153 | 0.150 | 0.348 | 0.058 |
+| recurrent, 4 passes | 0.254 | 15.14 | 0.147 | 0.132 | 0.315 | 0.058 |
+| 3 blocks x 1 pass | 0.466 | 23.45 | 0.373 | 0.171 | 0.466 | 0.111 |
+
+The narrow encoder has its own patch embedding and is compared at feature level
+only.
